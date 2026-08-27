@@ -218,6 +218,14 @@ pub(crate) struct ChatStreamConverter {
     tool_index_by_block: std::collections::HashMap<i64, usize>,
     next_tool_index: usize,
     finish_reason: &'static str,
+    /// 上游是否已显式给出 stop_reason（message_delta）
+    stop_reason_received: bool,
+    /// 本流是否已向客户端发出过 tool_call 帧
+    ///
+    /// 用于收尾兜底时的交叉判定：截断流没等到 message_delta 就结束的话，
+    /// 默认的 "stop" 会与已流出的 tool_calls 矛盾（OpenAI 语义下 stop 表示
+    /// 不存在待执行的调用），Agent 客户端会因此丢弃半截调用。
+    saw_tool_call: bool,
     usage: Option<Value>,
 }
 
@@ -234,6 +242,8 @@ impl ChatStreamConverter {
             tool_index_by_block: std::collections::HashMap::new(),
             next_tool_index: 0,
             finish_reason: "stop",
+            stop_reason_received: false,
+            saw_tool_call: false,
             usage: None,
         }
     }
@@ -241,7 +251,17 @@ impl ChatStreamConverter {
     /// 处理一个上游事件，返回待下发的 SSE 帧
     pub(crate) fn on_event(&mut self, name: &str, data: &Value) -> Vec<String> {
         match name {
-            "message_start" => self.ensure_role_frame(),
+            "message_start" => {
+                let frames = self.ensure_role_frame();
+                // 基线 usage：message_start 自带真实的 input_tokens 与缓存拆分。
+                // 先落一份基线，防止流在 message_delta 之前中断时 include_usage
+                // 客户端读到全零；最终 usage 到达时会覆盖此基线。
+                if self.usage.is_none() {
+                    let baseline = data.get("message").and_then(|m| m.get("usage"));
+                    self.usage = Some(convert_usage(baseline));
+                }
+                frames
+            }
             "content_block_start" => self.on_block_start(data),
             "content_block_delta" => self.on_block_delta(data),
             // 块级收尾在 OpenAI 协议里没有对应事件
@@ -253,6 +273,7 @@ impl ChatStreamConverter {
                     .and_then(Value::as_str)
                 {
                     self.finish_reason = map_finish_reason(Some(reason));
+                    self.stop_reason_received = true;
                 }
                 if let Some(usage) = data.get("usage") {
                     self.usage = Some(convert_usage(Some(usage)));
@@ -279,10 +300,18 @@ impl ChatStreamConverter {
 
         if !self.finish_sent {
             self.finish_sent = true;
+            // 上游没来得及显式给出 stop_reason（截断/异常中断）时按已流出内容推断：
+            // 发过 tool_call 帧就判 tool_calls，让 Agent 客户端的工具循环继续；
+            // 否则维持 "stop"。
+            let finish_reason = if !self.stop_reason_received && self.saw_tool_call {
+                "tool_calls"
+            } else {
+                self.finish_reason
+            };
             frames.push(self.frame(json!([{
                 "index": 0,
                 "delta": {},
-                "finish_reason": self.finish_reason,
+                "finish_reason": finish_reason,
             }])));
         }
 
@@ -347,6 +376,7 @@ impl ChatStreamConverter {
 
         let block_index = data.get("index").and_then(Value::as_i64).unwrap_or(0);
         let tool_index = self.assign_tool_index(block_index);
+        self.saw_tool_call = true;
 
         let mut frames = self.ensure_role_frame();
         frames.push(self.frame(json!([{
@@ -1019,6 +1049,112 @@ mod tests {
             "stop"
         );
         assert_eq!(frames[2], "data: [DONE]\n\n");
+    }
+
+    #[test]
+    fn truncated_after_tool_args_finishes_with_tool_calls() {
+        // 功能缺陷回归：上游在 tool_call 参数增量之后、message_delta 之前中断时，
+        // 收尾不得发 finish_reason="stop"（会让 Agent 客户端丢弃待执行的调用）
+        let mut conv = ChatStreamConverter::new("m", false);
+        let mut frames = conv.on_event("message_start", &json!({}));
+        frames.extend(conv.on_event(
+            "content_block_start",
+            &json!({"index": 1, "content_block": {
+                "type": "tool_use", "id": "t1", "name": "f", "input": {},
+            }}),
+        ));
+        frames.extend(conv.on_event(
+            "content_block_delta",
+            &json!({"index": 1, "delta": {"type": "input_json_delta", "partial_json": "{\"a\":1}"}}),
+        ));
+        // 此处模拟上游断开：无 message_delta / message_stop，直接收尾
+        frames.extend(conv.finish());
+
+        let finish = parse_frame(&frames[frames.len() - 2]).unwrap();
+        assert_eq!(finish["choices"][0]["finish_reason"], "tool_calls");
+        assert_eq!(frames.last().unwrap(), "data: [DONE]\n\n");
+    }
+
+    #[test]
+    fn truncated_plain_text_stream_keeps_stop() {
+        // 无工具调用的截断流维持 "stop"，不因修复误伤
+        let mut conv = ChatStreamConverter::new("m", false);
+        let mut frames = conv.on_event("message_start", &json!({}));
+        frames.extend(conv.on_event("content_block_delta", &text_delta(0, "x")));
+        frames.extend(conv.finish());
+
+        let finish = parse_frame(&frames[frames.len() - 2]).unwrap();
+        assert_eq!(finish["choices"][0]["finish_reason"], "stop");
+    }
+
+    #[test]
+    fn explicit_stop_reason_wins_over_inferred_tool_calls() {
+        // 上游显式给了 stop_reason 时以其为准（即使本流有 tool_call）——
+        // 例如 max_tokens 截断发生在工具调用过程中
+        let frames = run_stream(
+            &[
+                ("message_start", json!({})),
+                (
+                    "content_block_start",
+                    json!({"index": 1, "content_block": {
+                        "type": "tool_use", "id": "t1", "name": "f", "input": {},
+                    }}),
+                ),
+                (
+                    "message_delta",
+                    json!({"delta": {"stop_reason": "max_tokens"}}),
+                ),
+                ("message_stop", json!({})),
+            ],
+            false,
+        );
+        let finish = parse_frame(&frames[frames.len() - 2]).unwrap();
+        assert_eq!(finish["choices"][0]["finish_reason"], "length");
+    }
+
+    #[test]
+    fn message_start_usage_anchors_include_usage_when_delta_missing() {
+        // 流在 message_delta 之前中断：usage 帧应回退到 message_start 的基线，
+        // 而不是全零
+        let mut conv = ChatStreamConverter::new("m", true);
+        let mut frames = conv.on_event(
+            "message_start",
+            &json!({
+                "message": {"id": "msg_1", "usage": {
+                    "input_tokens": 123,
+                    "cache_read_input_tokens": 45,
+                    "cache_creation_input_tokens": 6,
+                }}
+            }),
+        );
+        frames.extend(conv.on_event("content_block_delta", &text_delta(0, "hi")));
+        frames.extend(conv.finish());
+
+        let usage_frame = parse_frame(&frames[frames.len() - 2]).unwrap();
+        assert_eq!(usage_frame["usage"]["prompt_tokens"], 174); // 123 + 45 + 6
+        assert_eq!(usage_frame["usage"]["prompt_tokens_details"]["cached_tokens"], 45);
+    }
+
+    #[test]
+    fn message_delta_usage_overrides_message_start_baseline() {
+        let frames = run_stream(
+            &[
+                (
+                    "message_start",
+                    json!({"message": {"usage": {"input_tokens": 7}}}),
+                ),
+                ("content_block_delta", text_delta(0, "x")),
+                (
+                    "message_delta",
+                    json!({"delta": {"stop_reason": "end_turn"}, "usage": {"input_tokens": 9, "output_tokens": 3}}),
+                ),
+                ("message_stop", json!({})),
+            ],
+            true,
+        );
+        let usage_frame = parse_frame(&frames[frames.len() - 2]).unwrap();
+        assert_eq!(usage_frame["usage"]["prompt_tokens"], 9);
+        assert_eq!(usage_frame["usage"]["completion_tokens"], 3);
     }
 
     #[test]

@@ -565,6 +565,70 @@ pub(crate) fn build_model_list() -> Vec<Model> {
             model_type: "chat".to_string(),
             max_tokens: 64000,
         },
+        // === 点号短 ID（上游 ListAvailableModels 直接提供，客户端按此选择） ===
+        Model {
+            id: "claude-opus-4.8".to_string(),
+            object: "model".to_string(),
+            created: 1775600000,
+            owned_by: "anthropic".to_string(),
+            display_name: "Claude Opus 4.8".to_string(),
+            model_type: "chat".to_string(),
+            max_tokens: 128000,
+        },
+        Model {
+            id: "claude-opus-4.7".to_string(),
+            object: "model".to_string(),
+            created: 1775600000,
+            owned_by: "anthropic".to_string(),
+            display_name: "Claude Opus 4.7".to_string(),
+            model_type: "chat".to_string(),
+            max_tokens: 128000,
+        },
+        Model {
+            id: "claude-opus-4.6".to_string(),
+            object: "model".to_string(),
+            created: 1775600000,
+            owned_by: "anthropic".to_string(),
+            display_name: "Claude Opus 4.6".to_string(),
+            model_type: "chat".to_string(),
+            max_tokens: 64000,
+        },
+        Model {
+            id: "claude-sonnet-4.6".to_string(),
+            object: "model".to_string(),
+            created: 1775600000,
+            owned_by: "anthropic".to_string(),
+            display_name: "Claude Sonnet 4.6".to_string(),
+            model_type: "chat".to_string(),
+            max_tokens: 64000,
+        },
+        Model {
+            id: "claude-opus-4.5".to_string(),
+            object: "model".to_string(),
+            created: 1775600000,
+            owned_by: "anthropic".to_string(),
+            display_name: "Claude Opus 4.5".to_string(),
+            model_type: "chat".to_string(),
+            max_tokens: 64000,
+        },
+        Model {
+            id: "claude-sonnet-4.5".to_string(),
+            object: "model".to_string(),
+            created: 1775600000,
+            owned_by: "anthropic".to_string(),
+            display_name: "Claude Sonnet 4.5".to_string(),
+            model_type: "chat".to_string(),
+            max_tokens: 64000,
+        },
+        Model {
+            id: "claude-haiku-4.5".to_string(),
+            object: "model".to_string(),
+            created: 1775600000,
+            owned_by: "anthropic".to_string(),
+            display_name: "Claude Haiku 4.5".to_string(),
+            model_type: "chat".to_string(),
+            max_tokens: 64000,
+        },
         // === 非 Claude 模型 ===
         Model {
             id: "auto".to_string(),
@@ -573,7 +637,7 @@ pub(crate) fn build_model_list() -> Vec<Model> {
             owned_by: "kiro".to_string(),
             display_name: "Auto (智能路由)".to_string(),
             model_type: "chat".to_string(),
-            max_tokens: 32000,
+            max_tokens: 64000,
         },
         Model {
             id: "deepseek-3.2".to_string(),
@@ -582,7 +646,7 @@ pub(crate) fn build_model_list() -> Vec<Model> {
             owned_by: "deepseek".to_string(),
             display_name: "DeepSeek 3.2".to_string(),
             model_type: "chat".to_string(),
-            max_tokens: 32000,
+            max_tokens: 64000,
         },
         Model {
             id: "glm-5".to_string(),
@@ -591,7 +655,7 @@ pub(crate) fn build_model_list() -> Vec<Model> {
             owned_by: "glm".to_string(),
             display_name: "GLM-5".to_string(),
             model_type: "chat".to_string(),
-            max_tokens: 32000,
+            max_tokens: 64000,
         },
         Model {
             id: "minimax-m2.5".to_string(),
@@ -600,7 +664,7 @@ pub(crate) fn build_model_list() -> Vec<Model> {
             owned_by: "minimax".to_string(),
             display_name: "MiniMax M2.5".to_string(),
             model_type: "chat".to_string(),
-            max_tokens: 32000,
+            max_tokens: 64000,
         },
         Model {
             id: "minimax-m2.1".to_string(),
@@ -609,7 +673,7 @@ pub(crate) fn build_model_list() -> Vec<Model> {
             owned_by: "minimax".to_string(),
             display_name: "MiniMax M2.1".to_string(),
             model_type: "chat".to_string(),
-            max_tokens: 32000,
+            max_tokens: 64000,
         },
         Model {
             id: "qwen3-coder-next".to_string(),
@@ -618,7 +682,7 @@ pub(crate) fn build_model_list() -> Vec<Model> {
             owned_by: "qwen".to_string(),
             display_name: "Qwen3 Coder Next".to_string(),
             model_type: "chat".to_string(),
-            max_tokens: 32000,
+            max_tokens: 64000,
         },
         Model {
             id: "gpt-5.6-sol".to_string(),
@@ -627,7 +691,7 @@ pub(crate) fn build_model_list() -> Vec<Model> {
             owned_by: "openai".to_string(),
             display_name: "GPT-5.6 Sol".to_string(),
             model_type: "chat".to_string(),
-            max_tokens: 32000,
+            max_tokens: 128000,
         },
         Model {
             id: "gpt-5.6-terra".to_string(),
@@ -636,7 +700,7 @@ pub(crate) fn build_model_list() -> Vec<Model> {
             owned_by: "openai".to_string(),
             display_name: "GPT-5.6 Terra".to_string(),
             model_type: "chat".to_string(),
-            max_tokens: 32000,
+            max_tokens: 128000,
         },
         Model {
             id: "gpt-5.6-luna".to_string(),
@@ -645,7 +709,7 @@ pub(crate) fn build_model_list() -> Vec<Model> {
             owned_by: "openai".to_string(),
             display_name: "GPT-5.6 Luna".to_string(),
             model_type: "chat".to_string(),
-            max_tokens: 32000,
+            max_tokens: 128000,
         },
     ]
 }
