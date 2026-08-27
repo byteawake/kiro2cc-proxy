@@ -21,6 +21,9 @@ pub enum AdminServiceError {
 
     /// 账号无效（验证失败）
     InvalidCredential(String),
+
+    /// 会话不存在（SSO 导入轮询的 session id 无效或已清理）
+    SessionNotFound(String),
 }
 
 impl fmt::Display for AdminServiceError {
@@ -32,6 +35,7 @@ impl fmt::Display for AdminServiceError {
             AdminServiceError::UpstreamError(msg) => write!(f, "上游服务错误: {}", msg),
             AdminServiceError::InternalError(msg) => write!(f, "内部错误: {}", msg),
             AdminServiceError::InvalidCredential(msg) => write!(f, "账号无效: {}", msg),
+            AdminServiceError::SessionNotFound(msg) => write!(f, "{}", msg),
         }
     }
 }
@@ -46,6 +50,7 @@ impl AdminServiceError {
             AdminServiceError::UpstreamError(_) => StatusCode::BAD_GATEWAY,
             AdminServiceError::InternalError(_) => StatusCode::INTERNAL_SERVER_ERROR,
             AdminServiceError::InvalidCredential(_) => StatusCode::BAD_REQUEST,
+            AdminServiceError::SessionNotFound(_) => StatusCode::NOT_FOUND,
         }
     }
 
@@ -59,6 +64,9 @@ impl AdminServiceError {
             }
             AdminServiceError::InvalidCredential(_) => {
                 AdminErrorResponse::invalid_request(self.to_string())
+            }
+            AdminServiceError::SessionNotFound(_) => {
+                AdminErrorResponse::not_found(self.to_string())
             }
         }
     }

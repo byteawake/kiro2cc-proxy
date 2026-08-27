@@ -101,7 +101,8 @@
     "toastQueryPartial": "Query complete: {{success}} succeeded, {{fail}} failed",
     "toastSelectToVerify": "Please select accounts to verify first",
     "toastVerifyCancelled": "Verification cancelled",
-    "toastVerifyDone": "Verification complete: {{success}}/{{total}} succeeded"
+    "toastVerifyDone": "Verification complete: {{success}}/{{total}} succeeded",
+    "ssoImport": "AWS SSO Import"
   },
   "credentials": {
     "metricPoolLabel": "Account pool",
@@ -303,7 +304,34 @@
     "errorLabel": "Error: {{error}}",
     "verifyBackgroundHint": "💡 Requests are spaced 2 seconds apart during verification to avoid bans. You can close this window; verification will continue in the background.",
     "runInBackgroundButton": "Run in Background",
-    "cancelVerifyButton": "Cancel Verification"
+    "cancelVerifyButton": "Cancel Verification",
+    "sso": {
+      "title": "AWS SSO Import",
+      "startUrlLabel": "Start URL",
+      "startUrlPlaceholder": "https://<alias>.awsapps.com/start",
+      "startUrlHint": "Your IAM Identity Center portal URL, available from your administrator",
+      "regionHint": "Auth Region is where your portal lives; API Region supports us-east-1 / eu-central-1 only",
+      "userCodeLabel": "User Code",
+      "userCodeHint": "Verify this code matches the page opened in your browser, sign in and click Allow access",
+      "reopenAuthPage": "Reopen sign-in page",
+      "waiting": "Waiting for you to sign in and approve in the browser…",
+      "lockedHint": "These parameters are locked on the server and cannot be changed",
+      "completedTitle": "Import succeeded",
+      "completedDesc": "Account #{{credentialId}} added",
+      "statusFailed": "Import failed",
+      "statusExpired": "Authorization timed out",
+      "statusDenied": "Authorization denied",
+      "statusCancelled": "Session cancelled",
+      "start": "Sign In",
+      "starting": "Starting…",
+      "cancelSession": "Cancel Session",
+      "retry": "Retry",
+      "done": "Done",
+      "toastStartUrlRequired": "Start URL is required",
+      "toastRegionRequired": "Auth Region is required",
+      "toastStartFailed": "Failed to start SSO session: {{message}}",
+      "toastCancelFailed": "Failed to cancel session: {{message}}"
+    }
   },
   "apiKeys": {
     "serviceInfo": "Service Connection Info",

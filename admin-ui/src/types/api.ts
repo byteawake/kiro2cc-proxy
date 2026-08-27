@@ -301,3 +301,43 @@ export interface FailureLogsResponse {
   pageSize: number
   totalPages: number
 }
+
+// ============ AWS SSO 设备授权自动导入 ============
+
+// SSO 会话状态
+export type SsoStatus =
+  | 'pending'
+  | 'completed'
+  | 'failed'
+  | 'expired'
+  | 'denied'
+  | 'cancelled'
+
+// 发起 SSO 会话请求（可选元数据与「添加账号」对话框字段对齐）
+export interface StartSsoSessionRequest {
+  startUrl: string
+  authRegion: string
+  apiRegion: string
+  priority?: number
+  email?: string
+  nickname?: string
+  proxyUrl?: string
+  proxyUsername?: string
+  proxyPassword?: string
+}
+
+// SSO 会话状态响应（不含 clientSecret / refreshToken 等敏感字段）
+export interface SsoSessionResponse {
+  sessionId: string
+  status: SsoStatus
+  startUrl: string
+  authRegion: string
+  apiRegion: string
+  userCode: string
+  verificationUri?: string
+  verificationUriComplete?: string
+  expiresAt: string
+  credentialId?: number
+  email?: string
+  error?: string
+}

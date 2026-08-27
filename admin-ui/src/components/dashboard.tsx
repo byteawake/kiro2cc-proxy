@@ -1,6 +1,6 @@
 // Copyright (c) 2026 Harllan He. Licensed under MIT.
 import { useState, useEffect, useMemo, useRef } from 'react'
-import { RefreshCw, LogOut, Server, Plus, Upload, FileUp, Trash2, CheckCircle2, Key, Settings, BarChart2, ScrollText, Boxes, Sun, Moon, Info, History, PanelLeftClose, PanelLeftOpen, FileText } from 'lucide-react'
+import { RefreshCw, LogOut, Server, Plus, Upload, FileUp, Trash2, CheckCircle2, KeyRound, Key, Settings, BarChart2, ScrollText, Boxes, Sun, Moon, Info, History, PanelLeftClose, PanelLeftOpen, FileText } from 'lucide-react'
 import { useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import { useTranslation } from 'react-i18next'
@@ -17,6 +17,7 @@ import { BalanceDialog } from '@/components/balance-dialog'
 import { AddCredentialDialog } from '@/components/add-credential-dialog'
 import { BatchImportDialog } from '@/components/batch-import-dialog'
 import { KamImportDialog } from '@/components/kam-import-dialog'
+import { SsoImportDialog } from '@/components/sso-import-dialog'
 import { BatchVerifyDialog, type VerifyResult } from '@/components/batch-verify-dialog'
 import { ApiKeysPanel } from '@/components/api-keys-panel'
 import { ApiKeyDetailPage } from '@/components/api-key-detail-page'
@@ -103,6 +104,7 @@ export function Dashboard({ onLogout }: DashboardProps) {
   const [addDialogOpen, setAddDialogOpen] = useState(false)
   const [batchImportDialogOpen, setBatchImportDialogOpen] = useState(false)
   const [kamImportDialogOpen, setKamImportDialogOpen] = useState(false)
+  const [ssoDialogOpen, setSsoDialogOpen] = useState(false)
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set())
   const [verifyDialogOpen, setVerifyDialogOpen] = useState(false)
   const [verifying, setVerifying] = useState(false)
@@ -1245,6 +1247,15 @@ export function Dashboard({ onLogout }: DashboardProps) {
               <Upload />
               <span className="hidden sm:inline">{t('dashboard.batchImport')}</span>
             </button>
+            <button
+              type="button"
+              onClick={() => setSsoDialogOpen(true)}
+              aria-label={t('dashboard.ssoImport')}
+              className={ACTION_BTN}
+            >
+              <KeyRound />
+              <span className="hidden sm:inline">{t('dashboard.ssoImport')}</span>
+            </button>
             {/* 验活进度浮动入口：设计稿无此项，为保留既有能力挂在主按钮左侧 */}
             {verifying && !verifyDialogOpen && (
               <button type="button" onClick={() => setVerifyDialogOpen(true)} className={ACTION_BTN}>
@@ -1353,6 +1364,12 @@ export function Dashboard({ onLogout }: DashboardProps) {
       <KamImportDialog
         open={kamImportDialogOpen}
         onOpenChange={setKamImportDialogOpen}
+      />
+
+      {/* AWS SSO 设备授权导入对话框 */}
+      <SsoImportDialog
+        open={ssoDialogOpen}
+        onOpenChange={setSsoDialogOpen}
       />
 
       {/* 批量验活对话框 */}

@@ -7,7 +7,7 @@
 
 use reqwest::Client;
 use reqwest::header::{AUTHORIZATION, CONTENT_TYPE, HOST, HeaderMap, HeaderValue};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::time::sleep;
@@ -18,7 +18,7 @@ use crate::kiro::endpoint::{
     BUCKET_THROTTLE_DURATION, Endpoint, EndpointBucketRegistry, EndpointName,
 };
 use crate::kiro::machine_id;
-use crate::kiro::model::credentials::KiroCredentials;
+use crate::kiro::model::credentials::{KiroCredentials, is_placeholder_profile_arn};
 use crate::kiro::token_manager::{CallContext, MultiTokenManager};
 use crate::model::config::TlsBackend;
 use crate::model::failure_log::FailureLogStore;
@@ -64,6 +64,13 @@ pub struct KiroProvider {
     failure_log_store: Option<Arc<FailureLogStore>>,
     /// 端点级 429 状态注册表（多端点 LB 使用）
     endpoint_registry: Arc<EndpointBucketRegistry>,
+    /// 已尝试过 profileArn 解析的账号 ID（进程内去重）
+    ///
+    /// 只在拿到**上游确定结果**后才写入：解析成功后账号已有真实 ARN，
+    /// `streaming_profile_arn()` 直接命中不会再进来；确定无 profile 的账号
+    /// （纯 BuilderID）靠这个集合避免每次请求都白跑一次往返。
+    /// 网络抖动等不确定失败不写入，留待下次请求重试。
+    profile_resolution_attempted: Mutex<HashSet<u64>>,
 }
 
 #[allow(dead_code)]
@@ -93,6 +100,7 @@ impl KiroProvider {
             throttle_log_store: None,
             failure_log_store: None,
             endpoint_registry: Arc::new(EndpointBucketRegistry::new()),
+            profile_resolution_attempted: Mutex::new(HashSet::new()),
         }
     }
 
@@ -143,6 +151,54 @@ impl KiroProvider {
     /// 获取 token_manager 的引用
     pub fn token_manager(&self) -> &MultiTokenManager {
         &self.token_manager
+    }
+
+    /// 在发起请求前，确保 Enterprise / IdC 账号的真实 profileArn 已解析并写入 `ctx`。
+    ///
+    /// 流式端点强制要求 profileArn：不带会被上游以
+    /// `403 {"message":"User is not authorized to make this call."}` 拒绝。
+    /// Enterprise / IdC 账号还必须是**真实** ARN —— BuilderID 占位符会因身份不匹配被拒，
+    /// 而真实 ARN 既不在 OIDC 刷新响应里返回，也无法凭空推导，只能查
+    /// `ListAvailableProfiles`。移植自 kiro.rs 的同名实现。
+    ///
+    /// 仅对「profileArn 缺失或仍是占位符」触发一次查询（进程内去重）：
+    /// - 命中真实 ARN → 写回并持久化，之后 `streaming_profile_arn()` 直接命中；
+    /// - 上游确定无 profile（纯 BuilderID）→ 标记已尝试，回退占位符；
+    /// - 查询失败 → **不标记**，本次按原 profileArn 继续，下次请求再试。
+    async fn ensure_profile_arn(&self, ctx: &mut CallContext) {
+        let needs = match ctx.credentials.profile_arn.as_deref() {
+            None => true,
+            Some(arn) => is_placeholder_profile_arn(arn),
+        };
+        if !needs {
+            return;
+        }
+        if self.profile_resolution_attempted.lock().contains(&ctx.id) {
+            return;
+        }
+
+        match self
+            .token_manager
+            .resolve_profile_arn_for(ctx.id, &ctx.token)
+            .await
+        {
+            Ok(Some(arn)) => {
+                ctx.credentials.profile_arn = Some(arn);
+                self.profile_resolution_attempted.lock().insert(ctx.id);
+            }
+            Ok(None) => {
+                // 上游确认该账号无 Enterprise profile：标记已尝试，后续回退占位符
+                self.profile_resolution_attempted.lock().insert(ctx.id);
+            }
+            Err(e) => {
+                // 网络/瞬态错误：不标记，下次请求再试；本次按原 profileArn 继续
+                tracing::warn!(
+                    "账号 #{} 解析真实 profileArn 失败（按原 profileArn 继续）: {}",
+                    ctx.id,
+                    e
+                );
+            }
+        }
     }
 
     /// 获取 API 基础 URL（使用 config 级 api_region + 默认 Ide 端点）
@@ -447,7 +503,7 @@ impl KiroProvider {
 
         for attempt in 0..max_retries {
             // 获取调用上下文（MCP 不涉及模型选择，但同样应用 sticky 路由）
-            let ctx = match self
+            let mut ctx = match self
                 .token_manager
                 .acquire_context_sticky(
                     None,
@@ -463,6 +519,9 @@ impl KiroProvider {
                     continue;
                 }
             };
+
+            // MCP 的 profileArn 同样需要真实 ARN（Enterprise / IdC 账号）
+            self.ensure_profile_arn(&mut ctx).await;
 
             // 获取单账号并发 permit
             let _cred_permit = self.semaphore_for(ctx.id).acquire_owned().await?;
@@ -708,7 +767,7 @@ impl KiroProvider {
 
         for attempt in 0..max_retries {
             // 获取调用上下文（优先路由到同一会话的缓存账号）
-            let ctx = match self
+            let mut ctx = match self
                 .token_manager
                 .acquire_context_sticky(
                     model.as_deref(),
@@ -724,6 +783,9 @@ impl KiroProvider {
                     continue;
                 }
             };
+
+            // Enterprise / IdC 账号需要真实 profileArn，流式端点强制要求
+            self.ensure_profile_arn(&mut ctx).await;
 
             // 获取单账号并发 permit
             let _cred_permit = self.semaphore_for(ctx.id).acquire_owned().await?;
@@ -1112,7 +1174,10 @@ impl KiroProvider {
     /// 将请求 body 中的 `profileArn` 替换为当前选中账号的值。
     ///
     /// - 账号有 profile_arn → 设置 / 覆盖字段
-    /// - 账号无 profile_arn → 移除字段（上游要求字段缺失而非 null）
+    /// - 账号无 profile_arn → 按登录方式补默认 ARN（Social → 共享 ARN，
+    ///   其余 → BuilderID 占位符；Enterprise / IdC 的占位符会随后被
+    ///   `ensure_profile_arn` 解析为真实 ARN）。上游已把 profileArn 改为必填，
+    ///   字段缺失会被拒（旧版 UA 回 403，新版 UA 回 400 "Invalid profileArn."）。
     /// - JSON 解析失败 → 原样返回，不阻断请求
     fn rewrite_profile_arn(body: &str, credentials: &KiroCredentials) -> String {
         let Ok(mut value) = serde_json::from_str::<serde_json::Value>(body) else {
@@ -1122,16 +1187,13 @@ impl KiroProvider {
             Some(o) => o,
             None => return body.to_string(),
         };
-        match &credentials.profile_arn {
-            Some(arn) => {
-                obj.insert(
-                    "profileArn".to_string(),
-                    serde_json::Value::String(arn.clone()),
-                );
-            }
-            None => {
-                obj.remove("profileArn");
-            }
+        if let Some(arn) = credentials.streaming_profile_arn() {
+            obj.insert(
+                "profileArn".to_string(),
+                serde_json::Value::String(arn),
+            );
+        } else {
+            obj.remove("profileArn");
         }
         serde_json::to_string(&value).unwrap_or_else(|_| body.to_string())
     }
@@ -1140,6 +1202,7 @@ impl KiroProvider {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::kiro::model::credentials::{BUILDER_ID_PROFILE_ARN, SOCIAL_PROFILE_ARN};
     use crate::kiro::token_manager::CallContext;
     use crate::model::config::Config;
 
@@ -1300,12 +1363,36 @@ mod tests {
     }
 
     #[test]
-    fn test_rewrite_profile_arn_removes_field_when_none() {
+    fn test_rewrite_profile_arn_fills_default_when_unset() {
+        // 上游已把 profileArn 改为必填：账号未配置 ARN 时按登录方式补默认值，
+        // 不再删除字段（旧行为会因字段缺失被上游 403/400 拒绝）。
         let body = r#"{"conversationState":{},"profileArn":"some-arn"}"#;
-        let cred = KiroCredentials::default(); // profile_arn is None
+
+        // auth_method 缺失按非 Social 处理 → BuilderID 占位符
+        let cred = KiroCredentials::default();
         let result = KiroProvider::rewrite_profile_arn(body, &cred);
         let v: serde_json::Value = serde_json::from_str(&result).unwrap();
-        assert!(v.get("profileArn").is_none());
+        assert_eq!(v["profileArn"].as_str(), Some(BUILDER_ID_PROFILE_ARN));
+
+        // Social 账号 → 共享 Social ARN
+        let mut social = KiroCredentials::default();
+        social.auth_method = Some("social".to_string());
+        let result = KiroProvider::rewrite_profile_arn(body, &social);
+        let v: serde_json::Value = serde_json::from_str(&result).unwrap();
+        assert_eq!(v["profileArn"].as_str(), Some(SOCIAL_PROFILE_ARN));
+    }
+
+    #[test]
+    fn test_rewrite_profile_arn_keeps_explicit_placeholder_verbatim() {
+        // BuilderID 账号显式存的占位符必须原样发送：剥掉它上游会拒绝请求。
+        // （真实 ARN 由 ensure_profile_arn 在请求前写回 credentials.profile_arn。）
+        let body = r#"{"conversationState":{},"profileArn":"old-arn"}"#;
+        let mut idc = KiroCredentials::default();
+        idc.auth_method = Some("idc".to_string());
+        idc.profile_arn = Some(BUILDER_ID_PROFILE_ARN.to_string());
+        let result = KiroProvider::rewrite_profile_arn(body, &idc);
+        let v: serde_json::Value = serde_json::from_str(&result).unwrap();
+        assert_eq!(v["profileArn"].as_str(), Some(BUILDER_ID_PROFILE_ARN));
     }
 
     #[test]

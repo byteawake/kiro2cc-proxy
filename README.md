@@ -797,11 +797,17 @@ GPT-5.6 系列的 Kiro 后端 schema 不支持 `additionalModelRequestFields`（
 
 **Q：企业版 IdC 账号请求返回 502，日志显示 <code>profileArn is required for this request</code>**
 
-企业版（Enterprise）IdC 账号调用 Q 端点强制要求 `profileArn`，但 IdC Token 刷新接口不会返回该字段，需要手动填写。管理面板「添加账号 / 编辑账号」对话框中已提供 **Profile ARN** 输入框，填入形如 `arn:aws:codewhisperer:<region>:<account-id>:profile/<profile-id>` 的值即可。`profileArn` 可从 Kiro IDE 本地缓存或 `ListAvailableProfiles` 获取，其所在 region 需与账号的 `apiRegion` 保持一致。Social 账号一般无需填写。
+企业版（Enterprise）IdC 账号调用 Q 端点强制要求 `profileArn`，且必须是真实 ARN（BuilderID 占位符会因身份不匹配被拒），但 IdC Token 刷新接口不会返回该字段。本版本起已支持**自动解析**：代理会在该账号首次请求前自动调用 `ListAvailableProfiles` 查询真实 profileArn 并回写到 `credentials.json`，无需手动操作（us-east-1 / eu-central-1 双端点自动探测与回退；纯 BuilderID 等没有 Enterprise profile 的账号会自动识别并使用官方占位符，不会反复重查）。自动解析失败时（网络抖动等）不影响本次请求，下次请求会自动重试。
+
+如需手动指定，管理面板「添加账号 / 编辑账号」对话框中提供 **Profile ARN** 输入框，填入形如 `arn:aws:codewhisperer:<region>:<account-id>:profile/<profile-id>` 的值即可（可从 Kiro IDE 本地缓存或 `ListAvailableProfiles` 获取，其所在 region 需与账号的 `apiRegion` 保持一致）；显式配置的值优先生效。Social 账号无需填写，代理会自动补共享 Social ARN。
 
 **Q：填写了 profileArn 后，企业版 IdC 账号查询余额仍返回 <code>403 Forbidden: Invalid token</code>**
 
 此问题已修复：AWS SSO OIDC 刷新接口会同时返回 `accessToken`（SSO portal session token）和 `idToken`（JWT），Amazon Q 数据面接口（对话请求）只接受 idToken，而额度查询接口（`getUsageLimits`）需要的是原始 accessToken——此前代理内部只保存了一份 token 并复用于两处，导致二者只能满足其一。修复后代理会分别保存两个 token 并按接口用途选用，无需用户任何操作，账号下一次刷新 Token 后自动生效（`credentials.json` 会新增内部字段 `ssoAccessToken`，向后兼容旧配置文件，无需手动编辑）。若升级后仍报错，尝试在管理面板重置该账号或等待 Token 自动过期刷新。
+
+**Q：不想手动导 refreshToken，能用 AWS SSO 登录的方式自动导入企业 IdC 账号吗**
+
+可以。账号管理工具栏的「**AWS SSO 登录导入**」按钮采用标准设备授权流程（RFC 8628，与 `aws sso login` 一致）：填入门户 Start URL 与 Auth Region、选择 API Region，点击发起登录后会弹出浏览器授权页并显示 User Code——核对一致后登录并点 Allow access，代理即自动完成 Token 获取与验活入库，同时解析真实 profileArn 和订阅等级。**邮箱与昵称会自动识别**：发起登录时优先请求身份声明作用域，用返回的 idToken 自动回填邮箱和昵称（昵称缺省时取邮箱），手填仍优先生效；另有可选的账号级代理，与「添加账号」落库字段完全一致；重复导入同一 Refresh Token 会被自动去重。
 
 **Q：子 API Key 消费额度能按真实 Kiro credits 计量吗（而不是估算的美元）**
 

@@ -101,7 +101,8 @@
     "toastQueryPartial": "查询完成：成功 {{success}} 个，失败 {{fail}} 个",
     "toastSelectToVerify": "请先选择要验活的账号",
     "toastVerifyCancelled": "已取消验活",
-    "toastVerifyDone": "验活完成：成功 {{success}}/{{total}}"
+    "toastVerifyDone": "验活完成：成功 {{success}}/{{total}}",
+    "ssoImport": "AWS SSO 登录导入"
   },
   "credentials": {
     "metricPoolLabel": "账号池",
@@ -303,7 +304,34 @@
     "errorLabel": "错误: {{error}}",
     "verifyBackgroundHint": "💡 验活过程中每次请求间隔 2 秒，防止被封号。你可以关闭此窗口，验活会在后台继续进行。",
     "runInBackgroundButton": "后台运行",
-    "cancelVerifyButton": "取消验活"
+    "cancelVerifyButton": "取消验活",
+    "sso": {
+      "title": "AWS SSO 登录导入",
+      "startUrlLabel": "Start URL",
+      "startUrlPlaceholder": "https://<alias>.awsapps.com/start",
+      "startUrlHint": "企业 IAM Identity Center 门户地址，可从管理员处获取",
+      "regionHint": "Auth Region 为门户所在区域；API Region 仅支持 us-east-1 / eu-central-1",
+      "userCodeLabel": "User Code",
+      "userCodeHint": "请在浏览器打开的页面中核对此 Code 一致，登录后点击 Allow access",
+      "reopenAuthPage": "重新打开登录页",
+      "waiting": "等待你在浏览器完成登录并批准…",
+      "lockedHint": "以上参数已在后端锁定，无法修改",
+      "completedTitle": "导入成功",
+      "completedDesc": "已添加账号 #{{credentialId}}",
+      "statusFailed": "导入失败",
+      "statusExpired": "授权已超时",
+      "statusDenied": "已拒绝授权",
+      "statusCancelled": "会话已取消",
+      "start": "发起登录",
+      "starting": "发起中…",
+      "cancelSession": "取消会话",
+      "retry": "重新发起",
+      "done": "完成",
+      "toastStartUrlRequired": "请填写 Start URL",
+      "toastRegionRequired": "请填写 Auth Region",
+      "toastStartFailed": "发起 SSO 会话失败：{{message}}",
+      "toastCancelFailed": "取消会话失败：{{message}}"
+    }
   },
   "apiKeys": {
     "serviceInfo": "服务连接信息",

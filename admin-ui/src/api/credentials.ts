@@ -22,6 +22,8 @@ import type {
   FailureLogsResponse,
   ModelsResponse,
   ReleaseNotesResponse,
+  StartSsoSessionRequest,
+  SsoSessionResponse,
 } from '@/types/api'
 
 // 创建 axios 实例
@@ -90,6 +92,28 @@ export async function addCredential(
   req: AddCredentialRequest
 ): Promise<AddCredentialResponse> {
   const { data } = await api.post<AddCredentialResponse>('/credentials', req)
+  return data
+}
+
+// ============ AWS SSO 设备授权自动导入 ============
+
+// 发起 SSO 会话（注册 OIDC 客户端 + 设备授权，返回 userCode）
+export async function startSsoSession(
+  req: StartSsoSessionRequest
+): Promise<SsoSessionResponse> {
+  const { data } = await api.post<SsoSessionResponse>('/sso/sessions', req)
+  return data
+}
+
+// 查询 SSO 会话状态（轮询用）
+export async function getSsoSession(sessionId: string): Promise<SsoSessionResponse> {
+  const { data } = await api.get<SsoSessionResponse>(`/sso/sessions/${sessionId}`)
+  return data
+}
+
+// 取消 SSO 会话
+export async function cancelSsoSession(sessionId: string): Promise<SsoSessionResponse> {
+  const { data } = await api.delete<SsoSessionResponse>(`/sso/sessions/${sessionId}`)
   return data
 }
 

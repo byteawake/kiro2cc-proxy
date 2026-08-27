@@ -8,6 +8,9 @@ import {
   getCredentialBalance,
   addCredential,
   deleteCredential,
+  startSsoSession,
+  getSsoSession,
+  cancelSsoSession,
   updateCredential,
   getLoadBalancingMode,
   setLoadBalancingMode,
@@ -31,7 +34,7 @@ import {
   getModels,
   getChangelog,
 } from '@/api/credentials'
-import type { AddCredentialRequest, UpdateCredentialRequest, CreateApiKeyRequest, UpdateApiKeyRequest } from '@/types/api'
+import type { AddCredentialRequest, UpdateCredentialRequest, CreateApiKeyRequest, UpdateApiKeyRequest, StartSsoSessionRequest, SsoSessionResponse } from '@/types/api'
 
 // 账号列表轮询间隔：页头「自动刷新 30s」标签与此值同源，避免文案与实际行为漂移
 export const CREDENTIALS_REFETCH_INTERVAL_MS = 30_000
@@ -116,6 +119,25 @@ export function useAddCredential() {
       queryClient.invalidateQueries({ queryKey: ['credentials'] })
     },
   })
+}
+
+// 发起 AWS SSO 导入会话（成功后无需刷新列表，导入完成时由轮询逻辑刷新）
+export function useStartSsoSession() {
+  return useMutation({
+    mutationFn: (req: StartSsoSessionRequest) => startSsoSession(req),
+  })
+}
+
+// 取消 SSO 导入会话
+export function useCancelSsoSession() {
+  return useMutation({
+    mutationFn: (sessionId: string) => cancelSsoSession(sessionId),
+  })
+}
+
+// 查询 SSO 会话状态（弹窗内轮询用）
+export async function pollSsoSession(sessionId: string): Promise<SsoSessionResponse> {
+  return getSsoSession(sessionId)
 }
 
 // 删除凭据

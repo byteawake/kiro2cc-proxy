@@ -11,6 +11,16 @@ use std::path::Path;
 use crate::http_client::ProxyConfig;
 use crate::model::config::Config;
 
+/// BuilderID 账号的占位符 profileArn
+///
+/// BuilderID 没有可解析的真实 profile，官方 IDE 就是原样发这个占位符。
+pub const BUILDER_ID_PROFILE_ARN: &str =
+    "arn:aws:codewhisperer:us-east-1:638616132270:profile/AAAACCCCXXXX";
+
+/// Social 登录（Github / Google）共用的 profileArn
+pub const SOCIAL_PROFILE_ARN: &str =
+    "arn:aws:codewhisperer:us-east-1:699475941385:profile/EHGA3GRVQMUK";
+
 /// Kiro OAuth 凭证
 #[derive(Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
@@ -184,6 +194,15 @@ impl std::fmt::Debug for KiroCredentials {
 fn is_zero(value: &u32) -> bool {
     *value == 0
 }
+
+/// 判断给定 profileArn 是否为 BuilderID 占位符（非真实可用的 profile）。
+///
+/// Enterprise / IdC 账号必须换成 `ListAvailableProfiles` 解析出的真实 ARN；
+/// 占位符对它们等同于「还没解析过」。
+pub fn is_placeholder_profile_arn(arn: &str) -> bool {
+    arn == BUILDER_ID_PROFILE_ARN
+}
+
 
 fn canonicalize_auth_method_value(value: &str) -> &str {
     if value.eq_ignore_ascii_case("builder-id") || value.eq_ignore_ascii_case("iam") {
@@ -397,6 +416,47 @@ impl KiroCredentials {
             // 如果还没有获取订阅信息，暂时允许（首次使用时会获取）
             None => true,
         }
+    }
+
+    /// 是否为 Social 登录（Github / Google）
+    fn is_social_login(&self) -> bool {
+        self.auth_method
+            .as_deref()
+            .map(|m| m.eq_ignore_ascii_case("social"))
+            .unwrap_or(false)
+    }
+
+    /// 账号缺少显式 profileArn 时应使用的默认 ARN：
+    /// Social 登录用共享 Social ARN，其余（BuilderID / IdC / external_idp）用
+    /// BuilderID 占位符（Enterprise 类账号随后会被真实 ARN 覆盖）。
+    fn default_profile_arn(&self) -> &'static str {
+        if self.is_social_login() {
+            SOCIAL_PROFILE_ARN
+        } else {
+            BUILDER_ID_PROFILE_ARN
+        }
+    }
+
+    /// 返回请求应发送的 profileArn。
+    ///
+    /// 上游已把 profileArn 改为必填：流式端点（`generateAssistantResponse`）与
+    /// 用量类接口不带会被拒（旧版 UA 回 403 "User is not authorized to make this
+    /// call."，新版 UA 回 400 "Invalid profileArn."）。
+    ///
+    /// - 已有显式 profileArn（真实 ARN / Social ARN / BuilderID 占位符）→ 原样返回。
+    ///   BuilderID 恰恰要原样带上占位符才回 200，剥掉会被拒；
+    /// - 尚未填充 → 按登录方式推断默认 ARN（Social → Social ARN，其余 → BuilderID
+    ///   占位符）。Enterprise / IdC 的占位符随后由 `ensure_profile_arn` 通过
+    ///   `ListAvailableProfiles` 解析并回填为真实 ARN。
+    ///
+    /// 返回 `Option` 是沿用上游 kiro.rs 的签名：那边 API Key 凭据没有 profileArn
+    /// 概念会返回 `None`；本项目不支持 API Key 凭据，OAuth 账号恒为 `Some`。
+    pub fn streaming_profile_arn(&self) -> Option<String> {
+        Some(
+            self.profile_arn
+                .clone()
+                .unwrap_or_else(|| self.default_profile_arn().to_string()),
+        )
     }
 }
 
@@ -1147,5 +1207,90 @@ mod tests {
         };
         let json = creds.to_pretty_json().unwrap();
         assert!(!json.contains("endpoint"));
+    }
+
+    // ============ streaming_profile_arn / 占位符测试 ============
+
+    /// 已回填真实 ARN 的账号原样返回，不做任何剥离。
+    #[test]
+    fn test_streaming_profile_arn_keeps_resolved_arn() {
+        let credentials = KiroCredentials {
+            auth_method: Some("idc".to_string()),
+            profile_arn: Some("arn:aws:codewhisperer:us-east-1:1234:profile/REAL".to_string()),
+            ..Default::default()
+        };
+
+        assert_eq!(
+            credentials.streaming_profile_arn().as_deref(),
+            Some("arn:aws:codewhisperer:us-east-1:1234:profile/REAL")
+        );
+    }
+
+    /// BuilderID 占位符必须原样保留：剥掉它上游会拒绝请求。
+    #[test]
+    fn test_streaming_profile_arn_keeps_builder_id_placeholder() {
+        let credentials = KiroCredentials {
+            auth_method: Some("idc".to_string()),
+            profile_arn: Some(BUILDER_ID_PROFILE_ARN.to_string()),
+            ..Default::default()
+        };
+
+        assert_eq!(
+            credentials.streaming_profile_arn().as_deref(),
+            Some(BUILDER_ID_PROFILE_ARN)
+        );
+    }
+
+    /// 未填充时按登录方式推断默认 ARN。
+    #[test]
+    fn test_streaming_profile_arn_falls_back_by_auth_method() {
+        let social = KiroCredentials {
+            auth_method: Some("social".to_string()),
+            profile_arn: None,
+            ..Default::default()
+        };
+        assert_eq!(
+            social.streaming_profile_arn().as_deref(),
+            Some(SOCIAL_PROFILE_ARN)
+        );
+
+        let idc = KiroCredentials {
+            auth_method: Some("idc".to_string()),
+            profile_arn: None,
+            ..Default::default()
+        };
+        assert_eq!(
+            idc.streaming_profile_arn().as_deref(),
+            Some(BUILDER_ID_PROFILE_ARN)
+        );
+
+        // auth_method 缺失时按非 Social 处理
+        let unknown = KiroCredentials::default();
+        assert_eq!(
+            unknown.streaming_profile_arn().as_deref(),
+            Some(BUILDER_ID_PROFILE_ARN)
+        );
+
+        // external_idp（Microsoft Entra ID）与 IdC 同属非 Social，回退占位符，
+        // 真实 ARN 由 ensure_profile_arn 查询 ListAvailableProfiles 后覆盖
+        let external_idp = KiroCredentials {
+            auth_method: Some("external_idp".to_string()),
+            profile_arn: None,
+            ..Default::default()
+        };
+        assert_eq!(
+            external_idp.streaming_profile_arn().as_deref(),
+            Some(BUILDER_ID_PROFILE_ARN)
+        );
+    }
+
+    /// is_placeholder 只认 BuilderID 占位符这一种。
+    #[test]
+    fn test_is_placeholder_profile_arn() {
+        assert!(is_placeholder_profile_arn(BUILDER_ID_PROFILE_ARN));
+        assert!(!is_placeholder_profile_arn(SOCIAL_PROFILE_ARN));
+        assert!(!is_placeholder_profile_arn(
+            "arn:aws:codewhisperer:us-east-1:1234:profile/REAL"
+        ));
     }
 }

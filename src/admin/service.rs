@@ -14,6 +14,7 @@ use crate::kiro::token_manager::MultiTokenManager;
 use crate::model::throttle_log::ThrottleLogStore;
 
 use super::error::AdminServiceError;
+use super::sso::{SsoError, SsoSessionManager, SsoSessionResponse, StartSsoSessionRequest};
 use super::types::{
     AddCredentialRequest, AddCredentialResponse, BalanceResponse, CredentialStatusItem,
     CredentialsStatusResponse, LoadBalancingModeResponse, SetLoadBalancingModeRequest,
@@ -88,6 +89,8 @@ pub struct AdminService {
     balance_cache: Mutex<HashMap<u64, CachedBalance>>,
     cache_path: Option<PathBuf>,
     throttle_log_store: Option<Arc<ThrottleLogStore>>,
+    /// AWS SSO 设备授权自动导入的会话管理器
+    sso_manager: SsoSessionManager,
 }
 
 impl AdminService {
@@ -99,6 +102,7 @@ impl AdminService {
         let balance_cache = Self::load_balance_cache_from(&cache_path);
 
         Self {
+            sso_manager: SsoSessionManager::new(token_manager.clone()),
             token_manager,
             balance_cache: Mutex::new(balance_cache),
             cache_path,
@@ -325,10 +329,38 @@ impl AdminService {
         })
     }
 
+    // ========================================================================
+    // AWS SSO 设备授权自动导入
+    // ========================================================================
+
+    /// 发起 SSO 导入会话：注册 OIDC 客户端并发起设备授权
+    pub async fn start_sso_session(
+        &self,
+        req: StartSsoSessionRequest,
+    ) -> Result<SsoSessionResponse, AdminServiceError> {
+        self.sso_manager
+            .start_session(req)
+            .await
+            .map_err(map_sso_error)
+    }
+
+    /// 查询 SSO 会话状态（前端轮询）
+    pub fn get_sso_session(&self, session_id: &str) -> Result<SsoSessionResponse, AdminServiceError> {
+        self.sso_manager
+            .get_session(session_id)
+            .map_err(map_sso_error)
+    }
+
+    /// 取消 SSO 会话
+    pub fn cancel_sso_session(&self, session_id: &str) -> Result<SsoSessionResponse, AdminServiceError> {
+        self.sso_manager
+            .cancel_session(session_id)
+            .map_err(map_sso_error)
+    }
+
     /// 删除账号
     pub fn delete_credential(&self, id: u64) -> Result<(), AdminServiceError> {
-        self.token_manager
-            .delete_credential(id)
+        self.token_manager.delete_credential(id)
             .map_err(|e| self.classify_delete_error(e, id))?;
 
         // 清理已删除账号的余额缓存
@@ -566,6 +598,15 @@ impl AdminService {
         } else {
             AdminServiceError::InvalidCredential(msg)
         }
+    }
+}
+
+/// SsoError → AdminServiceError 映射（供 HTTP 层统一产出错误响应）
+fn map_sso_error(e: SsoError) -> AdminServiceError {
+    match e {
+        SsoError::InvalidRequest(msg) => AdminServiceError::InvalidCredential(msg),
+        SsoError::NotFound(msg) => AdminServiceError::SessionNotFound(msg),
+        SsoError::Upstream(msg) => AdminServiceError::UpstreamError(msg),
     }
 }
 

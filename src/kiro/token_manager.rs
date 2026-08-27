@@ -16,10 +16,12 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration as StdDuration, Instant};
 
+use crate::common::jwt;
 use crate::http_client::{ProxyConfig, build_client};
 use crate::kiro::machine_id;
 use crate::kiro::model::available_models::AvailableModelsResponse;
-use crate::kiro::model::credentials::KiroCredentials;
+use crate::kiro::model::available_profiles::ListAvailableProfilesResponse;
+use crate::kiro::model::credentials::{KiroCredentials, is_placeholder_profile_arn};
 use crate::kiro::model::token_refresh::{
     IdcRefreshRequest, IdcRefreshResponse, RefreshRequest, RefreshResponse,
 };
@@ -387,6 +389,20 @@ async fn refresh_idc_token(
 ///   保持与历史行为一致（commit 4f39dd7 之前的 fallback 语义）。
 fn apply_idc_refresh_response(credentials: &mut KiroCredentials, data: IdcRefreshResponse) {
     credentials.sso_access_token = Some(data.access_token.clone());
+
+    // idToken 是 JWT 且携带身份声明时，回填空的展示字段（用户名/邮箱均以邮箱为准，
+    // 昵称无独立用户名时兜底为邮箱）。不覆盖手填值；老注册不带声明 scopes 时
+    // 无 idToken，此分支静默跳过。
+    if let Some(payload) = data.id_token.as_deref().and_then(jwt::decode_jwt_payload) {
+        let identity = jwt::extract_identity(&payload);
+        if credentials.email.is_none() {
+            credentials.email = identity.email.clone();
+        }
+        if credentials.nickname.is_none() {
+            credentials.nickname = identity.display_name.or_else(|| credentials.email.clone());
+        }
+    }
+
     credentials.access_token = Some(data.id_token.unwrap_or(data.access_token));
 
     if let Some(new_refresh_token) = data.refresh_token {
@@ -477,6 +493,23 @@ async fn refresh_external_idp_token(
     let expires_at = Utc::now() + Duration::seconds(expires_in);
     new_credentials.expires_at = Some(expires_at.to_rfc3339());
 
+    // Entra ID 等 IdP 的 id_token / access_token 通常为 JWT：有身份声明时
+    // 回填空的邮箱 / 昵称（规则同 IdC：都归到邮箱），已填则不动
+    let identity_source = data["id_token"]
+        .as_str()
+        .or_else(|| data["access_token"].as_str())
+        .and_then(jwt::decode_jwt_payload)
+        .map(|payload| jwt::extract_identity(&payload));
+    if let Some(identity) = identity_source {
+        if new_credentials.email.is_none() {
+            new_credentials.email = identity.email.clone();
+        }
+        if new_credentials.nickname.is_none() {
+            new_credentials.nickname =
+                identity.display_name.or_else(|| new_credentials.email.clone());
+        }
+    }
+
     Ok(new_credentials)
 }
 
@@ -517,14 +550,17 @@ pub(crate) async fn get_usage_limits(
     let kiro_version = &config.kiro_version;
 
     // 构建 URL
+    // 上游已把用量类接口的 profileArn 改为必填：不带会被拒（旧版 UA 回 403
+    // "User is not authorized..."，新版 UA 回 400 "Invalid profileArn."）。
+    // 取值用 streaming_profile_arn()，账号未显式配置时按登录方式补默认 ARN
+    // （Social → 共享 ARN，BuilderID → 占位符；BuilderID 必须原样带占位符才回 200）。
     let mut url = format!(
         "https://{}/getUsageLimits?origin=AI_EDITOR&resourceType=AGENTIC_REQUEST",
         host
     );
 
-    // profileArn 是可选的
-    if let Some(profile_arn) = &credentials.profile_arn {
-        url.push_str(&format!("&profileArn={}", urlencoding::encode(profile_arn)));
+    if let Some(profile_arn) = credentials.streaming_profile_arn() {
+        url.push_str(&format!("&profileArn={}", urlencoding::encode(&profile_arn)));
     }
 
     // 构建 User-Agent headers
@@ -573,6 +609,141 @@ pub(crate) async fn get_usage_limits(
 
     let data: UsageLimitsResponse = response.json().await?;
     Ok(data)
+}
+
+/// 官方 Kiro 用量 / profile 类接口仅在 `us-east-1` 与 `eu-central-1` 两个端点提供服务。
+///
+/// 依据账号的 SSO 区域选择主端点，并返回另一个端点作为回退候选：
+/// - `eu-central-1` 或任何 `eu-*` 区域 → 主端点 `eu-central-1`
+/// - 其余区域 → 主端点 `us-east-1`
+///
+/// 这样导入的 Enterprise / IdC 账号即使 SSO 区域不是 `us-east-1`（例如
+/// `ap-southeast-1`），也能命中正确的端点。
+fn rest_api_region_candidates(sso_region: &str) -> [&'static str; 2] {
+    let primary_eu = sso_region == "eu-central-1" || sso_region.starts_with("eu-");
+    if primary_eu {
+        ["eu-central-1", "us-east-1"]
+    } else {
+        ["us-east-1", "eu-central-1"]
+    }
+}
+
+/// 上游是否明确表示「该账号类型没有 profile 概念」。
+///
+/// BuilderID 账号调 `ListAvailableProfiles` 会稳定收到：
+/// `403 {"__type":"com.amazon.aws.codewhisperer#AccessDeniedException",
+///       "message":"AWS Builder ID is not supported for this operation."}`
+///
+/// 这是**账号属性**（BuilderID 天生无 profile），不是查询故障 —— 重试一万次也是同样
+/// 结果，不该让调用方反复重查。必须与网络抖动、限流、5xx 区分开：那些重试有意义。
+///
+/// 刻意只认这一种确定性否定，不采用「非 200 一律当作没有 profile」的粗口径：后者会
+/// 让 Enterprise 账号在一次网络抖动后错用占位符 ARN，请求全数被拒。
+fn is_no_profile_concept_response(status: u16, body: &str) -> bool {
+    status == 403 && body.contains("Builder ID is not supported for this operation")
+}
+
+/// 构造用量 / profile 类控制面接口共用的 UA 对：`(user-agent, x-amz-user-agent)`。
+fn usage_api_user_agents(credentials: &KiroCredentials, config: &Config) -> (String, String) {
+    let machine_id = machine_id::generate_from_credentials(credentials, config);
+    let kiro_version = &config.kiro_version;
+    let user_agent = format!(
+        "aws-sdk-js/1.0.0 ua/2.1 os/darwin#24.6.0 lang/js md/nodejs#22.21.1 \
+         api/codewhispererruntime#1.0.0 m/N,E KiroIDE-{}-{}",
+        kiro_version, machine_id
+    );
+    let amz_user_agent = format!(
+        "{} KiroIDE-{}-{}",
+        USAGE_LIMITS_AMZ_USER_AGENT_PREFIX, kiro_version, machine_id
+    );
+    (user_agent, amz_user_agent)
+}
+
+/// 获取该账号可用的真实 profileArn 列表（`ListAvailableProfiles`）。
+///
+/// Enterprise / IAM Identity Center (IdC) 账号必须用真实 profileArn 调用流式端点；
+/// 该 ARN 既不是 BuilderID 占位符，也**不在 OIDC 刷新响应里返回**（AWS SSO OIDC 的
+/// `/token` 只给 access_token / refresh_token / expires_in，没有 profile 概念），
+/// 只能通过本接口获取。移植自 kiro.rs（fix: 流式端点补发 profileArn 系列）。
+///
+/// 上游接口（AWS JSON 1.0，**与用量类的 REST GET 不同**）：
+/// `POST https://q.{region}.amazonaws.com/`，请求头
+/// `x-amz-target: AmazonCodeWhispererService.ListAvailableProfiles`，
+/// `Content-Type: application/x-amz-json-1.0`，Body `{"maxResults":N}`。
+///
+/// 仅在 `us-east-1` / `eu-central-1` 提供服务，依据账号 SSO 区域选主端点，
+/// 主端点未返回 profile 时回退到另一个端点。
+pub(crate) async fn list_available_profiles(
+    credentials: &KiroCredentials,
+    config: &Config,
+    token: &str,
+    proxy: Option<&ProxyConfig>,
+) -> anyhow::Result<ListAvailableProfilesResponse> {
+    tracing::debug!("正在获取可用 profile 列表...");
+
+    let sso_region = credentials.effective_auth_region(config);
+    let candidates = rest_api_region_candidates(sso_region);
+    let (user_agent, amz_user_agent) = usage_api_user_agents(credentials, config);
+
+    let client = build_client(proxy, 60, config.tls_backend)?;
+
+    let mut last_error: Option<String> = None;
+    let mut empty_seen = false;
+    for region in candidates.iter() {
+        let host = format!("q.{}.amazonaws.com", region);
+        let url = format!("https://{}/", host);
+
+        let response = client
+            .post(&url)
+            .header("content-type", "application/x-amz-json-1.0")
+            .header(
+                "x-amz-target",
+                "AmazonCodeWhispererService.ListAvailableProfiles",
+            )
+            .header("x-amz-user-agent", &amz_user_agent)
+            .header("User-Agent", &user_agent)
+            .header("host", &host)
+            .header("amz-sdk-invocation-id", uuid::Uuid::new_v4().to_string())
+            .header("amz-sdk-request", "attempt=1; max=1")
+            .header("Authorization", format!("Bearer {}", token))
+            .header("Connection", "close")
+            .body(r#"{"maxResults":10}"#)
+            .send()
+            .await?;
+
+        let status = response.status();
+
+        if status.is_success() {
+            let data: ListAvailableProfilesResponse = response.json().await?;
+            // 该区域无 profile 时尝试另一个区域端点（账号可能在 eu-central-1）
+            if data.first_arn().is_none() {
+                empty_seen = true;
+                continue;
+            }
+            return Ok(data);
+        }
+
+        let body_text = response.text().await.unwrap_or_default();
+        // 上游明确回「BuilderID 不支持此操作」= 该账号没有 profile 概念，是账号属性而非
+        // 查询故障。视同「成功但为空」，让调用方标记已尝试、回退占位符，不再每请求重查。
+        if is_no_profile_concept_response(status.as_u16(), &body_text) {
+            empty_seen = true;
+            continue;
+        }
+        last_error = Some(format!("{} {}", status, body_text));
+        // 403 等错误继续尝试下一个候选端点
+    }
+
+    // 没有任何端点返回 profile：若至少有一次「成功但为空」或确定性否定，
+    // 视为该账号无 Enterprise profile（BuilderID 等），返回空让调用方回退占位符。
+    if empty_seen {
+        return Ok(ListAvailableProfilesResponse::default());
+    }
+
+    bail!(
+        "获取可用 profile 失败: {}",
+        last_error.unwrap_or_else(|| "无可用端点".to_string())
+    );
 }
 
 /// 获取当前支持的模型列表（含官方费率倍率）
@@ -2643,6 +2814,89 @@ impl MultiTokenManager {
         }
 
         Ok(usage_limits)
+    }
+
+    /// 解析并回填该账号的真实 profileArn（`ListAvailableProfiles`）。
+    ///
+    /// 返回值语义：
+    /// - `Ok(Some(arn))` —— 已有真实 ARN，或本次解析成功（成功时写回账号并持久化）；
+    /// - `Ok(None)` —— 上游**确定**该账号没有 Enterprise profile（纯 BuilderID 等），
+    ///   调用方应回退到占位符逻辑并标记已尝试，不再重查；
+    /// - `Err(_)` —— 查询失败（网络抖动 / 限流 / 5xx）。调用方**不应**标记已尝试，
+    ///   否则一次抖动会把 Enterprise 账号永久卡在占位符上。
+    pub async fn resolve_profile_arn_for(
+        &self,
+        id: u64,
+        token: &str,
+    ) -> anyhow::Result<Option<String>> {
+        let credentials = {
+            let entries = self.entries.lock();
+            entries
+                .iter()
+                .find(|e| e.id == id)
+                .map(|e| e.credentials.clone())
+                .ok_or_else(|| anyhow::anyhow!("账号不存在: {}", id))?
+        };
+
+        // 已有真实 ARN（含 Social 共享 ARN）→ 直接用，无需查询
+        if let Some(arn) = credentials.profile_arn.as_deref() {
+            if !is_placeholder_profile_arn(arn) {
+                return Ok(Some(arn.to_string()));
+            }
+        }
+
+        let effective_proxy = credentials.effective_proxy(self.proxy.as_ref());
+        let profiles =
+            list_available_profiles(&credentials, &self.config, token, effective_proxy.as_ref())
+                .await?;
+
+        let Some(arn) = profiles.first_arn().map(|s| s.to_string()) else {
+            // 无 Enterprise profile（如纯 BuilderID 账号）：保持占位符回退逻辑
+            return Ok(None);
+        };
+
+        // 写回真实 ARN 并持久化
+        {
+            let mut entries = self.entries.lock();
+            if let Some(entry) = entries.iter_mut().find(|e| e.id == id) {
+                entry.credentials.profile_arn = Some(arn.clone());
+            }
+        }
+        if let Err(e) = self.persist_credentials() {
+            tracing::warn!("profileArn 回填后持久化失败（不影响本次请求）: {}", e);
+        }
+        tracing::info!("账号 #{} 已解析并回填真实 profileArn: {}", id, arn);
+
+        Ok(Some(arn))
+    }
+
+    /// 按账号 ID 解析真实 profileArn（Admin 入口可用，自取有效 Token）。
+    ///
+    /// 与 [`Self::resolve_profile_arn_for`] 的区别只是自己负责取 token。
+    /// 注意这里不做刷新：Token 过期场景由调用方先走 `force_refresh_token_for`
+    /// 或正常请求链路（provider 的 ensure_profile_arn 总在有效 Token 上发起）。
+    /// 当前请求链路已由 provider 自动解析，此方法供管理面板 / 后续 SSO 导入流程复用。
+    #[allow(dead_code)]
+    pub async fn resolve_profile_arn_for_id(&self, id: u64) -> anyhow::Result<Option<String>> {
+        let credentials = {
+            let entries = self.entries.lock();
+            entries
+                .iter()
+                .find(|e| e.id == id)
+                .map(|e| e.credentials.clone())
+                .ok_or_else(|| anyhow::anyhow!("账号不存在: {}", id))?
+        };
+
+        // ListAvailableProfiles 与 getUsageLimits 同为 Q 控制面接口：
+        // IdC 账号需用 SSO portal 的 accessToken（sso_access_token），缺失时回退
+        // access_token 以保持向后兼容（见 select_usage_limits_token）。
+        let raw = credentials
+            .access_token
+            .as_deref()
+            .ok_or_else(|| anyhow::anyhow!("账号无 access_token"))?;
+        let token = select_usage_limits_token(&credentials, raw);
+
+        self.resolve_profile_arn_for(id, token).await
     }
 
     /// 添加新账号（Admin API）
@@ -4750,5 +5004,129 @@ mod tests {
             validate_refresh_token(&cred).is_err(),
             "未指定 auth_method 应使用默认长度限制"
         );
+    }
+
+    // ============ ListAvailableProfiles / profileArn 解析辅助测试 ============
+
+    /// 构造用于测试的无签名 JWT（payload 段为 base64url 编码的 JSON）
+    fn test_jwt(payload: &serde_json::Value) -> String {
+        use base64::Engine;
+        let header = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(br#"{"alg":"none"}"#);
+        let body =
+            base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(payload.to_string().as_bytes());
+        format!("{header}.{body}.x")
+    }
+
+    #[test]
+    fn test_apply_idc_refresh_response_backfills_identity_from_id_token() {
+        // 刷新返回了带身份声明的 idToken：空的邮箱 / 昵称被自动回填
+        let mut credentials = KiroCredentials {
+            auth_method: Some("idc".to_string()),
+            ..Default::default()
+        };
+        let data_jwt = test_jwt(&serde_json::json!({
+            "email": "alice@corp.com",
+            "preferred_username": "alice@corp.com"
+        }));
+        let data = IdcRefreshResponse {
+            access_token: "opaque-portal-token".to_string(),
+            id_token: Some(data_jwt.clone()),
+            refresh_token: Some("new-refresh".to_string()),
+            expires_in: Some(3600),
+        };
+
+        apply_idc_refresh_response(&mut credentials, data);
+
+        // 字段语义保持不变：access_token 存 idToken（数据面用），sso_access_token 存原始 accessToken
+        let jwt = data_jwt.clone();
+        assert_eq!(credentials.access_token.as_deref(), Some(jwt.as_str()));
+        assert_eq!(
+            credentials.sso_access_token.as_deref(),
+            Some("opaque-portal-token")
+        );
+        assert_eq!(credentials.email.as_deref(), Some("alice@corp.com"));
+        assert_eq!(credentials.nickname.as_deref(), Some("alice@corp.com"));
+    }
+
+    #[test]
+    fn test_apply_idc_refresh_response_keeps_existing_identity_fields() {
+        // 用户手填过的邮箱 / 昵称永不被覆盖
+        let mut credentials = KiroCredentials {
+            auth_method: Some("idc".to_string()),
+            email: Some("manual@example.com".to_string()),
+            nickname: Some("手填名".to_string()),
+            ..Default::default()
+        };
+        let data = IdcRefreshResponse {
+            access_token: "at".to_string(),
+            id_token: Some(test_jwt(&serde_json::json!({
+                "email": "upstream@corp.com",
+                "name": "Upstream"
+            }))),
+            refresh_token: None,
+            expires_in: None,
+        };
+
+        apply_idc_refresh_response(&mut credentials, data);
+
+        assert_eq!(credentials.email.as_deref(), Some("manual@example.com"));
+        assert_eq!(credentials.nickname.as_deref(), Some("手填名"));
+    }
+
+    #[test]
+    fn test_apply_idc_refresh_response_without_id_token_skips_backfill() {
+        // 老 registration 没有 idToken：行为与既往完全一致
+        let mut credentials = KiroCredentials {
+            auth_method: Some("idc".to_string()),
+            ..Default::default()
+        };
+        let data = IdcRefreshResponse {
+            access_token: "only-opaque".to_string(),
+            id_token: None,
+            refresh_token: None,
+            expires_in: None,
+        };
+
+        apply_idc_refresh_response(&mut credentials, data);
+
+        assert_eq!(credentials.email, None);
+        assert_eq!(credentials.nickname, None);
+        assert_eq!(credentials.access_token.as_deref(), Some("only-opaque"));
+    }
+
+    #[test]
+    fn test_rest_api_region_candidates() {
+        // eu 区域（含非服务的 eu-* 任意区域）主端点 eu-central-1，回退 us-east-1
+        assert_eq!(
+            rest_api_region_candidates("eu-central-1"),
+            ["eu-central-1", "us-east-1"]
+        );
+        assert_eq!(
+            rest_api_region_candidates("eu-west-1"),
+            ["eu-central-1", "us-east-1"]
+        );
+        // 其余区域（含未在服务列表中的 ap-* 等）主端点 us-east-1
+        assert_eq!(
+            rest_api_region_candidates("us-east-1"),
+            ["us-east-1", "eu-central-1"]
+        );
+        assert_eq!(
+            rest_api_region_candidates("ap-southeast-1"),
+            ["us-east-1", "eu-central-1"]
+        );
+    }
+
+    #[test]
+    fn test_is_no_profile_concept_response() {
+        // BuilderID 账号的确定性否定：403 + 固定 message
+        let body = r#"{"__type":"com.amazon.aws.codewhisperer#AccessDeniedException","message":"AWS Builder ID is not supported for this operation."}"#;
+        assert!(is_no_profile_concept_response(403, body));
+
+        // 其他状态码 / 其他错误不是「账号无 profile」：网络抖动、限流等应可重试
+        assert!(!is_no_profile_concept_response(500, body));
+        assert!(!is_no_profile_concept_response(
+            403,
+            r#"{"message":"User is not authorized to make this call."}"#
+        ));
     }
 }

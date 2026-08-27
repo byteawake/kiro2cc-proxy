@@ -146,6 +146,13 @@ pub struct Config {
     #[serde(default = "default_model_cache_ttl_secs")]
     pub model_cache_ttl_secs: u64,
 
+    /// AWS SSO OIDC 自动导入注册客户端使用的 scopes
+    ///
+    /// 默认使用 CodeWhisperer scopes（与 Kiro IDE 一致），使取得的 Token 可访问
+    /// Kiro API；仅 `sso:account:access` 只能访问 AWS 账号，调用 Kiro API 会 403。
+    #[serde(default = "default_sso_scopes")]
+    pub sso_scopes: Vec<String>,
+
     /// Prompt cache 模拟与指纹追踪配置
     #[serde(default)]
     pub cache_simulation: CacheSimulationConfig,
@@ -200,6 +207,17 @@ fn default_model_cache_ttl_secs() -> u64 {
     3600
 }
 
+/// AWS SSO OIDC 自动导入的默认 scopes（与 Kiro IDE 一致）
+fn default_sso_scopes() -> Vec<String> {
+    vec![
+        "codewhisperer:completions".to_string(),
+        "codewhisperer:analysis".to_string(),
+        "codewhisperer:conversations".to_string(),
+        "codewhisperer:transformations".to_string(),
+        "codewhisperer:taskassist".to_string(),
+    ]
+}
+
 impl Default for Config {
     fn default() -> Self {
         Self {
@@ -223,6 +241,7 @@ impl Default for Config {
             load_balancing_mode: default_load_balancing_mode(),
             max_rpm_per_credential: default_max_rpm_per_credential(),
             model_cache_ttl_secs: default_model_cache_ttl_secs(),
+            sso_scopes: default_sso_scopes(),
             cache_simulation: CacheSimulationConfig::default(),
             config_path: None,
         }

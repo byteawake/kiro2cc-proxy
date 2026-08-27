@@ -27,6 +27,7 @@ mod log_handler;
 mod middleware;
 mod router;
 mod service;
+pub mod sso;
 pub mod types;
 
 pub use middleware::AdminState;

@@ -9,6 +9,7 @@ use axum::{
 
 use super::{
     middleware::AdminState,
+    sso::StartSsoSessionRequest,
     types::{
         AddCredentialRequest, SetDisabledRequest, SetLoadBalancingModeRequest, SetPriorityRequest,
         SuccessResponse, UpdateCredentialRequest,
@@ -90,6 +91,46 @@ pub async fn add_credential(
     Json(payload): Json<AddCredentialRequest>,
 ) -> impl IntoResponse {
     match state.service.add_credential(payload).await {
+        Ok(response) => Json(response).into_response(),
+        Err(e) => (e.status_code(), Json(e.into_response())).into_response(),
+    }
+}
+
+// ========================================================================
+// AWS SSO 设备授权自动导入
+// ========================================================================
+
+/// POST /api/admin/sso/sessions
+/// 发起 SSO 导入会话（注册 OIDC 客户端 + 设备授权，返回 userCode）
+pub async fn start_sso_session(
+    State(state): State<AdminState>,
+    Json(payload): Json<StartSsoSessionRequest>,
+) -> impl IntoResponse {
+    match state.service.start_sso_session(payload).await {
+        Ok(response) => Json(response).into_response(),
+        Err(e) => (e.status_code(), Json(e.into_response())).into_response(),
+    }
+}
+
+/// GET /api/admin/sso/sessions/:id
+/// 查询 SSO 会话状态（供前端轮询）
+pub async fn get_sso_session(
+    State(state): State<AdminState>,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    match state.service.get_sso_session(&id) {
+        Ok(response) => Json(response).into_response(),
+        Err(e) => (e.status_code(), Json(e.into_response())).into_response(),
+    }
+}
+
+/// DELETE /api/admin/sso/sessions/:id
+/// 取消 SSO 会话
+pub async fn cancel_sso_session(
+    State(state): State<AdminState>,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    match state.service.cancel_sso_session(&id) {
         Ok(response) => Json(response).into_response(),
         Err(e) => (e.status_code(), Json(e.into_response())).into_response(),
     }
