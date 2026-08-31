@@ -36,14 +36,12 @@ fn new_id(prefix: &str) -> String {
 
 /// 上游 `stop_reason` 是否表示输出被截断
 ///
-/// 两种取值都来自 `src/anthropic/handlers.rs`：`max_tokens` 是命中 `max_tokens` 上限，
-/// `model_context_window_exceeded` 是上下文窗口耗尽。对 Responses 客户端而言两者都是
-/// "没写完就停了"，统一映射为 `max_output_tokens`。
+/// `max_tokens` 来自 `src/anthropic/handlers.rs`：命中 `max_tokens` 上限。
+/// 注意 `model_context_window_exceeded`（上下文窗口耗尽）**不在此列**——它表示
+/// 输入太长，客户端该做的是压缩会话，流式路径对其以 error 事件收尾、非流式
+/// 路径透传自定义 reason，不再与输出截断混为一谈。
 fn is_truncated(stop_reason: Option<&str>) -> bool {
-    matches!(
-        stop_reason,
-        Some("max_tokens") | Some("model_context_window_exceeded")
-    )
+    matches!(stop_reason, Some("max_tokens"))
 }
 
 /// 把 Anthropic 的 usage 换算为 Responses usage（字段名与 Chat Completions 不同）
@@ -232,9 +230,17 @@ pub(crate) fn convert_non_stream(
         "usage": convert_usage(anthropic.get("usage")),
     });
 
-    if is_truncated(stop_reason) {
+    let context_exceeded = stop_reason == Some("model_context_window_exceeded");
+    if is_truncated(stop_reason) || context_exceeded {
         response["status"] = json!("incomplete");
-        response["incomplete_details"] = json!({"reason": "max_output_tokens"});
+        // OpenAI 规范只定义了 max_output_tokens / content_filter；上下文耗尽借用
+        // incomplete_details 如实透传自定义 reason，便于客户端区分两种「没写完」
+        let reason = if context_exceeded {
+            "context_window_exceeded"
+        } else {
+            "max_output_tokens"
+        };
+        response["incomplete_details"] = json!({"reason": reason});
     }
 
     response
@@ -290,6 +296,8 @@ pub(crate) struct ResponsesStreamConverter {
     created_sent: bool,
     finished: bool,
     truncated: bool,
+    /// 上游判定上下文窗口耗尽：语义与「输出被截断」完全不同，须以 error 事件如实收尾
+    context_exceeded: bool,
     usage: Option<Value>,
     next_output_index: i64,
     /// Anthropic block index → 打开中的 output item
@@ -310,6 +318,7 @@ impl ResponsesStreamConverter {
             created_sent: false,
             finished: false,
             truncated: false,
+            context_exceeded: false,
             usage: None,
             next_output_index: 0,
             open: HashMap::new(),
@@ -334,7 +343,12 @@ impl ResponsesStreamConverter {
                     .and_then(|d| d.get("stop_reason"))
                     .and_then(Value::as_str)
                 {
-                    self.truncated = is_truncated(Some(reason));
+                    match reason {
+                        // 上下文窗口耗尽 ≠ 输出被截断：客户端该做的是压缩会话，
+                        // 伪装成 max_output_tokens 只会误导并诱发无意义的整轮重试
+                        "model_context_window_exceeded" => self.context_exceeded = true,
+                        other => self.truncated = is_truncated(Some(other)),
+                    }
                 }
                 if let Some(usage) = data.get("usage") {
                     self.usage = Some(convert_usage(Some(usage)));
@@ -360,6 +374,18 @@ impl ResponsesStreamConverter {
         frames.extend(self.close_all_open());
 
         self.finished = true;
+        if self.context_exceeded {
+            tracing::warn!("上游判定上下文窗口耗尽，Responses 流以 error 事件收尾（不再伪装成 max_output_tokens）");
+            frames.push(self.event(
+                "error",
+                json!({
+                    "code": "context_length_exceeded",
+                    "message": "Conversation context exceeded the model's context window. Compact the conversation or start a new one, then retry.",
+                    "param": Value::Null,
+                }),
+            ));
+            return frames;
+        }
         let status = if self.truncated {
             "incomplete"
         } else {
@@ -1317,39 +1343,65 @@ mod tests {
 
     #[test]
     fn truncated_stream_ends_with_response_incomplete() {
-        for reason in ["max_tokens", "model_context_window_exceeded"] {
-            let frames = run_stream(&[
-                (
-                    "content_block_start",
-                    json!({"index": 0, "content_block": {"type": "text", "text": ""}}),
-                ),
-                (
-                    "content_block_delta",
-                    json!({"index": 0, "delta": {"type": "text_delta", "text": "半截"}}),
-                ),
-                ("content_block_stop", json!({"index": 0})),
-                (
-                    "message_delta",
-                    json!({"delta": {"stop_reason": reason}, "usage": {"input_tokens": 1, "output_tokens": 1}}),
-                ),
-                ("message_stop", json!({})),
-            ]);
+        let frames = run_stream(&[
+            (
+                "content_block_start",
+                json!({"index": 0, "content_block": {"type": "text", "text": ""}}),
+            ),
+            (
+                "content_block_delta",
+                json!({"index": 0, "delta": {"type": "text_delta", "text": "半截"}}),
+            ),
+            ("content_block_stop", json!({"index": 0})),
+            (
+                "message_delta",
+                json!({"delta": {"stop_reason": "max_tokens"}, "usage": {"input_tokens": 1, "output_tokens": 1}}),
+            ),
+            ("message_stop", json!({})),
+        ]);
 
-            let names = event_names(&frames);
-            assert_eq!(names.last().unwrap(), "response.incomplete", "{}", reason);
-            assert!(
-                !names.iter().any(|n| n == "response.completed"),
-                "{}",
-                reason
-            );
+        let names = event_names(&frames);
+        assert_eq!(names.last().unwrap(), "response.incomplete");
 
-            let (_, last) = parse_frame(frames.last().unwrap());
-            assert_eq!(last["response"]["status"], json!("incomplete"));
-            assert_eq!(
-                last["response"]["incomplete_details"]["reason"],
-                json!("max_output_tokens")
-            );
-        }
+        let (_, last) = parse_frame(frames.last().unwrap());
+        assert_eq!(last["response"]["status"], json!("incomplete"));
+        assert_eq!(
+            last["response"]["incomplete_details"]["reason"],
+            json!("max_output_tokens")
+        );
+    }
+
+    #[test]
+    fn context_window_exceeded_ends_with_error_event() {
+        // 回归：上下文窗口耗尽曾被伪装成 response.incomplete + max_output_tokens，
+        // Codex 显示误导性的 reason 并对同一个超大请求无限重试
+        let frames = run_stream(&[
+            (
+                "content_block_start",
+                json!({"index": 0, "content_block": {"type": "text", "text": ""}}),
+            ),
+            (
+                "content_block_delta",
+                json!({"index": 0, "delta": {"type": "text_delta", "text": "部分"}}),
+            ),
+            ("content_block_stop", json!({"index": 0})),
+            (
+                "message_delta",
+                json!({"delta": {"stop_reason": "model_context_window_exceeded"}, "usage": {"input_tokens": 900000, "output_tokens": 1}}),
+            ),
+            ("message_stop", json!({})),
+        ]);
+
+        let names = event_names(&frames);
+        assert_eq!(names.last().unwrap(), "error");
+        assert!(
+            !names.iter().any(|n| n == "response.completed" || n == "response.incomplete"),
+            "上下文耗尽不得伪装成任何正常收尾: {names:?}"
+        );
+
+        let (_, last) = parse_frame(frames.last().unwrap());
+        assert_eq!(last["code"], json!("context_length_exceeded"));
+        assert!(last["message"].as_str().unwrap().contains("context window"));
     }
 
     #[test]
@@ -1684,23 +1736,37 @@ mod tests {
 
     #[test]
     fn max_tokens_stop_reason_yields_incomplete_status() {
-        for reason in ["max_tokens", "model_context_window_exceeded"] {
-            let out = convert_non_stream(
-                &json!({
-                    "content": [{"type": "text", "text": "半句"}],
-                    "stop_reason": reason,
-                }),
-                "gpt-5-codex",
-            );
-            assert_eq!(out["status"], "incomplete", "stop_reason={reason}");
-            assert_eq!(
-                out["incomplete_details"],
-                json!({"reason": "max_output_tokens"}),
-                "stop_reason={reason}"
-            );
-            // 已产出的内容仍要保留
-            assert_eq!(out["output"][0]["content"][0]["text"], "半句");
-        }
+        let out = convert_non_stream(
+            &json!({
+                "content": [{"type": "text", "text": "半句"}],
+                "stop_reason": "max_tokens",
+            }),
+            "gpt-5-codex",
+        );
+        assert_eq!(out["status"], "incomplete");
+        assert_eq!(
+            out["incomplete_details"],
+            json!({"reason": "max_output_tokens"})
+        );
+        // 已产出的内容仍要保留
+        assert_eq!(out["output"][0]["content"][0]["text"], "半句");
+    }
+
+    #[test]
+    fn context_exceeded_non_stream_reports_honest_reason() {
+        let out = convert_non_stream(
+            &json!({
+                "content": [{"type": "text", "text": "半句"}],
+                "stop_reason": "model_context_window_exceeded",
+            }),
+            "gpt-5-codex",
+        );
+        assert_eq!(out["status"], "incomplete");
+        assert_eq!(
+            out["incomplete_details"],
+            json!({"reason": "context_window_exceeded"})
+        );
+        assert_eq!(out["output"][0]["content"][0]["text"], "半句");
     }
 
     #[test]
