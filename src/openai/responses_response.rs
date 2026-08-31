@@ -375,14 +375,11 @@ impl ResponsesStreamConverter {
 
         self.finished = true;
         if self.context_exceeded {
-            tracing::warn!("上游判定上下文窗口耗尽，Responses 流以 error 事件收尾（不再伪装成 max_output_tokens）");
-            frames.push(self.event(
-                "error",
-                json!({
-                    "code": "context_length_exceeded",
-                    "message": "Conversation context exceeded the model's context window. Compact the conversation or start a new one, then retry.",
-                    "param": Value::Null,
-                }),
+            tracing::warn!("上游判定上下文窗口耗尽，Responses 流以 response.failed 收尾（不再伪装成 max_output_tokens）");
+            frames.push(self.failed_event(
+                "invalid_request_error",
+                Some("context_length_exceeded"),
+                "Conversation context exceeded the model's context window. Compact the conversation or start a new one, then retry.",
             ));
             return frames;
         }
@@ -424,20 +421,27 @@ impl ResponsesStreamConverter {
             return Vec::new();
         }
         let (message, error_type, code) = super::error::extract_stream_error(data);
-        tracing::warn!(error_type = %error_type, "上游流式响应报错，已下发 error 事件并终止");
+        tracing::warn!(error_type = %error_type, "上游流式响应报错，已下发 response.failed 并终止");
 
         let mut frames = self.ensure_created();
         frames.extend(self.close_all_open());
         self.finished = true;
-        frames.push(self.event(
-            "error",
-            json!({
-                "code": code.map(Value::from).unwrap_or(Value::Null),
-                "message": message,
-                "param": Value::Null,
-            }),
-        ));
+        frames.push(self.failed_event(&error_type, code.as_deref(), &message));
         frames
+    }
+
+    /// 以 `response.failed` 终止流
+    ///
+    /// Codex 只把 `response.failed`（`response.error.message`）当作可展示的失败终态：
+    /// 裸 `error` 事件会被它当作流被硬切，报 "stream closed before response.completed"。
+    fn failed_event(&mut self, error_type: &str, code: Option<&str>, message: &str) -> String {
+        let mut response = self.snapshot("failed");
+        response["error"] = json!({
+            "type": error_type,
+            "code": code.map(Value::from).unwrap_or(Value::Null),
+            "message": message,
+        });
+        self.event("response.failed", json!({"response": response}))
     }
 
     /// 首两个事件（`response.created` + `response.in_progress`）只发一次
@@ -1393,15 +1397,18 @@ mod tests {
         ]);
 
         let names = event_names(&frames);
-        assert_eq!(names.last().unwrap(), "error");
+        assert_eq!(names.last().unwrap(), "response.failed");
         assert!(
             !names.iter().any(|n| n == "response.completed" || n == "response.incomplete"),
             "上下文耗尽不得伪装成任何正常收尾: {names:?}"
         );
 
         let (_, last) = parse_frame(frames.last().unwrap());
-        assert_eq!(last["code"], json!("context_length_exceeded"));
-        assert!(last["message"].as_str().unwrap().contains("context window"));
+        assert_eq!(
+            last["response"]["error"]["code"],
+            json!("context_length_exceeded")
+        );
+        assert!(last["response"]["error"]["message"].as_str().unwrap().contains("context window"));
     }
 
     #[test]
@@ -1527,10 +1534,10 @@ mod tests {
         let names = event_names(&frames);
         assert_eq!(
             names,
-            vec!["response.created", "response.in_progress", "error"]
+            vec!["response.created", "response.in_progress", "response.failed"]
         );
         let (_, err) = parse_frame(frames.last().unwrap());
-        assert_eq!(err["message"], json!("上游繁忙"));
+        assert_eq!(err["response"]["error"]["message"], json!("上游繁忙"));
     }
 
     #[test]
@@ -1560,7 +1567,7 @@ mod tests {
                 .filter(|n| *n == "response.output_item.done")
                 .count(),
         );
-        assert_eq!(names.last().unwrap(), "error");
+        assert_eq!(names.last().unwrap(), "response.failed");
         assert!(!names.iter().any(|n| n == "response.completed"));
         assert!(!names.iter().any(|n| n == "response.incomplete"));
 
