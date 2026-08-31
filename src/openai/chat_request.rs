@@ -16,9 +16,7 @@
 use serde_json::{Value, json};
 
 use super::model_map::map_model;
-
-/// 未指定 `max_tokens` 时的默认值，与 `/v1/models` 对外声明的 `max_tokens` 一致
-pub(super) const DEFAULT_MAX_TOKENS: i64 = 32000;
+use crate::anthropic::model_max_output_tokens;
 
 /// 上游接受的最小推理预算，低于此值会被拒绝
 const MIN_THINKING_BUDGET: i64 = 1024;
@@ -67,13 +65,15 @@ pub(crate) fn convert(body: &Value) -> Result<ConvertedChatRequest, String> {
         .and_then(Value::as_bool)
         .unwrap_or(false);
 
-    // max_completion_tokens 是新字段名，优先于已弃用的 max_tokens
+    // max_completion_tokens 是新字段名，优先于已弃用的 max_tokens；
+    // 未指定时取模型原生上限（与 /v1/models 宣告一致），沿用 32000 旧默认
+    // 会把长输出拦腰截断——thinking 还要再从同一信封里扣掉一部分
     let max_tokens = body
         .get("max_completion_tokens")
         .and_then(Value::as_i64)
         .or_else(|| body.get("max_tokens").and_then(Value::as_i64))
         .filter(|n| *n > 0)
-        .unwrap_or(DEFAULT_MAX_TOKENS);
+        .unwrap_or_else(|| i64::from(model_max_output_tokens(&map_model(&client_model))));
 
     let (system, anthropic_messages) = convert_messages(messages);
     // 入参非空不代表转换后非空：整段全是 system、或每条 content 都为空时会被过滤干净。
@@ -458,7 +458,7 @@ mod tests {
         assert!(!r.stream);
         assert!(!r.include_usage);
         assert_eq!(r.anthropic_body["model"], "gpt-5.6-terra");
-        assert_eq!(r.anthropic_body["max_tokens"], DEFAULT_MAX_TOKENS);
+        assert_eq!(r.anthropic_body["max_tokens"], 64_000);
         assert_eq!(r.anthropic_body["stream"], false);
         assert_eq!(
             r.anthropic_body["messages"],

@@ -24,6 +24,8 @@
 //! ```
 
 mod converter;
+/// openai 侧请求转换用它推导「客户端未指定输出上限」时的模型原生默认值
+pub(crate) use converter::model_max_output_tokens;
 pub(crate) mod handlers;
 pub mod middleware;
 mod router;

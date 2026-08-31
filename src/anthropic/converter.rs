@@ -1438,7 +1438,8 @@ fn convert_tools(tools: &Option<Vec<super::types::Tool>>) -> Vec<Tool> {
 /// 根据模型返回 Kiro 允许的 max_tokens 上限
 /// claude-opus-5 / claude-opus-4.7 / claude-opus-4.8 Max Output = 128K（1M 窗口代际）
 /// claude-sonnet-5 Max Output = 64K，与 sonnet-4.x 同档，走默认分支即可
-fn model_max_output_tokens(model: &str) -> i32 {
+/// openai 侧请求转换用它推导「客户端未指定输出上限」时的默认值，与 /v1/models 宣告一致
+pub(crate) fn model_max_output_tokens(model: &str) -> i32 {
     let m = model.to_lowercase();
     if m.contains("opus-4-7")
         || m.contains("opus-4.7")
@@ -1491,11 +1492,18 @@ fn build_additional_model_request_fields(
 
     if req.max_tokens > 0 {
         let cap = model_max_output_tokens(&req.model);
-        let mut capped = req.max_tokens.min(cap);
-        if cap == 128000 {
-            // Kiro 侧 schema 对 opus-4.7/4.8/5 代际强制 max_tokens minimum = 1024
-            capped = capped.max(1024);
+        // Kiro（Anthropic 口径）thinking 计入 max_tokens：原样转发时正文只剩
+        // max_tokens - budget，推理一长（effort=high 时预算 24576）长输出必被
+        // ContentLengthExceededException 截断，客户端拿到 response.incomplete
+        // 即断流。这里把预算加回信封，仍封顶模型原生上限。
+        let mut desired = req.max_tokens;
+        if let Some(t) = req.thinking.as_ref().filter(|t| t.is_enabled()) {
+            desired = req.max_tokens.saturating_add(t.budget_tokens);
         }
+        let mut capped = desired.min(cap);
+        // Kiro 侧 schema 对 max_tokens 强制 minimum = 1024（实测 64K 档同样拒绝
+        // 小于 1024 的取值：REQUEST_BODY_INVALID "must have a minimum value of 1024.0"）
+        capped = capped.max(1024);
         fields.insert("max_tokens".into(), serde_json::json!(capped));
     }
 
@@ -3432,5 +3440,102 @@ mod tests {
         assert_eq!(model_max_output_tokens("claude-opus-4.5"), 64000);
         assert_eq!(model_max_output_tokens("claude-sonnet-5"), 64000);
         assert_eq!(model_max_output_tokens("claude-haiku-4.5"), 64000);
+    }
+
+    #[test]
+    fn test_thinking_budget_added_to_max_tokens_envelope() {
+        // Kiro（Anthropic 口径）thinking 计入 max_tokens：信封必须加回预算，
+        // 否则正文只剩 max_tokens - budget，长输出被 ContentLengthExceededException 截断
+        use super::super::types::{Message as AnthropicMessage, Thinking};
+
+        let req = |model: &str, thinking: Option<Thinking>| MessagesRequest {
+            model: model.to_string(),
+            max_tokens: 32000,
+            messages: vec![AnthropicMessage {
+                role: "user".to_string(),
+                content: serde_json::json!("Hello"),
+            }],
+            stream: false,
+            system: None,
+            tools: None,
+            tool_choice: None,
+            thinking,
+            output_config: None,
+            metadata: None,
+        };
+
+        // effort=high（预算 24576）+ 客户端 32000 → 56576，未触及 64K 上限
+        let r = convert_request(&req(
+            "claude-sonnet-4.6",
+            Some(Thinking {
+                thinking_type: "enabled".to_string(),
+                budget_tokens: 24576,
+            }),
+        ))
+        .unwrap();
+        assert_eq!(r.additional_model_request_fields.as_ref().unwrap()["max_tokens"], 56576);
+
+        // 128K 档模型同样加回预算
+        let r = convert_request(&req(
+            "claude-opus-4.8",
+            Some(Thinking {
+                thinking_type: "enabled".to_string(),
+                budget_tokens: 24576,
+            }),
+        ))
+        .unwrap();
+        assert_eq!(r.additional_model_request_fields.as_ref().unwrap()["max_tokens"], 56576);
+
+        // 加回后仍封顶模型原生上限
+        let r = convert_request(&req(
+            "claude-sonnet-4.6",
+            Some(Thinking {
+                thinking_type: "enabled".to_string(),
+                budget_tokens: 40000,
+            }),
+        ))
+        .unwrap();
+        assert_eq!(r.additional_model_request_fields.as_ref().unwrap()["max_tokens"], 64000);
+
+        // adaptive 视同启用；thinking 缺席时不抬信封
+        let r = convert_request(&req(
+            "claude-sonnet-4.6",
+            Some(Thinking {
+                thinking_type: "adaptive".to_string(),
+                budget_tokens: 12000,
+            }),
+        ))
+        .unwrap();
+        assert_eq!(r.additional_model_request_fields.as_ref().unwrap()["max_tokens"], 44000);
+        let r = convert_request(&req("claude-sonnet-4.6", None)).unwrap();
+        assert_eq!(r.additional_model_request_fields.as_ref().unwrap()["max_tokens"], 32000);
+    }
+
+    #[test]
+    fn test_max_tokens_floored_at_1024_for_all_models() {
+        // 回归：Kiro 对 max_tokens 强制 minimum = 1024，64K 档同样拒绝小值
+        // （实测 REQUEST_BODY_INVALID "must have a minimum value of 1024.0"）
+        use super::super::types::Message as AnthropicMessage;
+
+        let req = |model: &str| MessagesRequest {
+            model: model.to_string(),
+            max_tokens: 100,
+            messages: vec![AnthropicMessage {
+                role: "user".to_string(),
+                content: serde_json::json!("Hello"),
+            }],
+            stream: false,
+            system: None,
+            tools: None,
+            tool_choice: None,
+            thinking: None,
+            output_config: None,
+            metadata: None,
+        };
+
+        let r = convert_request(&req("claude-sonnet-4.6")).unwrap();
+        assert_eq!(r.additional_model_request_fields.as_ref().unwrap()["max_tokens"], 1024);
+        let r = convert_request(&req("claude-opus-4.8")).unwrap();
+        assert_eq!(r.additional_model_request_fields.as_ref().unwrap()["max_tokens"], 1024);
     }
 }

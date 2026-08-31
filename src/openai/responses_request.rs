@@ -28,10 +28,11 @@ use std::collections::HashSet;
 use serde_json::{Value, json};
 
 use super::chat_request::{
-    DEFAULT_MAX_TOKENS, MessageAccumulator, convert_image_url, convert_reasoning_effort,
-    convert_tool, flatten_text, parse_tool_arguments, warn_if_tool_choice_unsupported,
+    MessageAccumulator, convert_image_url, convert_reasoning_effort, convert_tool, flatten_text,
+    parse_tool_arguments, warn_if_tool_choice_unsupported,
 };
 use super::model_map::map_model;
+use crate::anthropic::model_max_output_tokens;
 
 /// `namespace` 容器的嵌套深度上限；超出即跳过，避免畸形请求把栈递归穿了
 const MAX_NAMESPACE_DEPTH: usize = 4;
@@ -179,11 +180,13 @@ pub(crate) fn convert(body: &Value) -> Result<ConvertedResponsesRequest, String>
 
     let stream = body.get("stream").and_then(Value::as_bool).unwrap_or(false);
 
+    // 未指定时取模型原生上限（与 /v1/models 宣告一致）：Codex 长流程里 32000
+    // 旧默认 + thinking 共用同一信封，是长输出被 response.incomplete 截断的主因
     let max_tokens = body
         .get("max_output_tokens")
         .and_then(Value::as_i64)
         .filter(|n| *n > 0)
-        .unwrap_or(DEFAULT_MAX_TOKENS);
+        .unwrap_or_else(|| i64::from(model_max_output_tokens(&map_model(&client_model))));
 
     let mut system = Vec::new();
     let instructions = flatten_text(body.get("instructions"));
@@ -460,7 +463,7 @@ mod tests {
         assert_eq!(r.client_model, "gpt-5-codex");
         assert!(!r.stream);
         assert_eq!(r.anthropic_body["model"], "gpt-5.6-terra");
-        assert_eq!(r.anthropic_body["max_tokens"], DEFAULT_MAX_TOKENS);
+        assert_eq!(r.anthropic_body["max_tokens"], 64_000);
         assert_eq!(
             r.anthropic_body["system"],
             json!([{"type": "text", "text": "You are Codex."}])
