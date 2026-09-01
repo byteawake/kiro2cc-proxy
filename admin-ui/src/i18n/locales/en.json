@@ -726,6 +726,12 @@
     "colShare": "Share",
     "shareOf": "Top {{count}} cover {{percent}} of credits",
     "empty": "No data in this range",
-    "toastRefreshed": "Dashboard refreshed"
+    "toastRefreshed": "Dashboard refreshed",
+    "custom": "Custom",
+    "startLabel": "Start time",
+    "endLabel": "End time",
+    "keyFilterLabel": "Filter by API Key",
+    "allKeys": "All API Keys",
+    "customPending": "Pick a valid custom range"
   }
 }

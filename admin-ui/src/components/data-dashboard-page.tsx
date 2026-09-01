@@ -1,5 +1,5 @@
 // Copyright (c) 2026 Harllan He. Licensed under MIT.
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { Activity, RotateCw } from 'lucide-react'
@@ -9,12 +9,23 @@ import { PageHead } from '@/components/page-head'
 import { Segmented, UpdatedAgo } from '@/components/toolbar'
 import { CELL, PANEL, PANEL_TITLE, TH_BASE } from '@/components/table-kit'
 import { useDashboard } from '@/hooks/use-dashboard'
+import type { DashboardQuery } from '@/api/dashboard'
 import { useApiKeys } from '@/hooks/use-credentials'
 import { extractErrorMessage } from '@/lib/utils'
 import { localeTag } from '@/lib/locale'
 import type { DashboardBucket, DashboardSlice } from '@/types/api'
 
 type RangeKey = '24' | '72' | '168' | '720'
+type RangeMode = RangeKey | 'custom'
+
+/** Date → datetime-local 输入值（浏览器本地时区） */
+function toLocalInput(d: Date): string {
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`
+}
+
+const CHIP =
+  'inline-flex h-[31px] flex-none items-center gap-[7px] rounded-[7px] border border-hairline-2 bg-surface px-2 font-mono text-[11.5px] tabular-nums text-ink-2 shadow-hair'
 
 /** 大数缩写：1.2k / 3.4M（Tokens 列用，避免表格被撑爆） */
 function compactTokens(n: number): string {
@@ -35,9 +46,37 @@ function fmtCredits(n: number): string {
  */
 export function DataDashboardPage() {
   const { t } = useTranslation()
-  const [range, setRange] = useState<RangeKey>('168')
-  const { data, isLoading, refetch, dataUpdatedAt } = useDashboard(Number(range))
+  const [range, setRange] = useState<RangeMode>('168')
+  const [startLocal, setStartLocal] = useState('')
+  const [endLocal, setEndLocal] = useState('')
+  const [apiKeyFilter, setApiKeyFilter] = useState('')
+
+  // 自定义区间 → Unix 秒；未就绪/非法时返回 null 暂停查询
+  const query: DashboardQuery | null = useMemo(() => {
+    const apiKey = apiKeyFilter === '' ? undefined : Number(apiKeyFilter)
+    if (range === 'custom') {
+      if (startLocal === '' || endLocal === '') return null
+      const start = Math.floor(new Date(startLocal).getTime() / 1000)
+      const end = Math.floor(new Date(endLocal).getTime() / 1000)
+      if (!Number.isFinite(start) || !Number.isFinite(end) || start >= end) return null
+      return { start, end, apiKey }
+    }
+    return { hours: Number(range), apiKey }
+  }, [range, startLocal, endLocal, apiKeyFilter])
+
+  const { data, isLoading, refetch, dataUpdatedAt } = useDashboard(query)
   const { data: apiKeys } = useApiKeys()
+
+  const switchToCustom = () => {
+    if (range !== 'custom') {
+      if (startLocal === '' || endLocal === '') {
+        const now = new Date()
+        setStartLocal(toLocalInput(new Date(now.getTime() - 7 * 86_400_000)))
+        setEndLocal(toLocalInput(now))
+      }
+      setRange('custom')
+    }
+  }
 
   const keyNames = new Map((apiKeys ?? []).map((k) => [k.id, k.name]))
   const resolveKeyName = (raw: string): string => {
@@ -69,15 +108,50 @@ export function DataDashboardPage() {
           <>
             <Segmented
               value={range}
-              onChange={setRange}
+              onChange={(v) => (v === 'custom' ? switchToCustom() : setRange(v))}
               groupLabel={t('dataDashboard.rangeGroupLabel')}
               options={[
                 { key: '24', label: t('dataDashboard.range24h') },
                 { key: '72', label: t('dataDashboard.range72h') },
                 { key: '168', label: t('dataDashboard.range7d') },
                 { key: '720', label: t('dataDashboard.range30d') },
+                { key: 'custom', label: t('dataDashboard.custom') },
               ]}
             />
+            {range === 'custom' && (
+              <span className={CHIP}>
+                <input
+                  type="datetime-local"
+                  aria-label={t('dataDashboard.startLabel')}
+                  className="bg-transparent text-[11.5px] outline-none"
+                  value={startLocal}
+                  max={endLocal || undefined}
+                  onChange={(e) => setStartLocal(e.target.value)}
+                />
+                <span className="text-ink-3">—</span>
+                <input
+                  type="datetime-local"
+                  aria-label={t('dataDashboard.endLabel')}
+                  className="bg-transparent text-[11.5px] outline-none"
+                  value={endLocal}
+                  min={startLocal || undefined}
+                  onChange={(e) => setEndLocal(e.target.value)}
+                />
+              </span>
+            )}
+            <select
+              aria-label={t('dataDashboard.keyFilterLabel')}
+              className={`${CHIP} cursor-pointer appearance-none pr-2 [&_option]:bg-surface`}
+              value={apiKeyFilter}
+              onChange={(e) => setApiKeyFilter(e.target.value)}
+            >
+              <option value="">{t('dataDashboard.allKeys')}</option>
+              {(apiKeys ?? []).map((k) => (
+                <option key={k.id} value={String(k.id)}>
+                  {k.name}
+                </option>
+              ))}
+            </select>
             <UpdatedAgo dataUpdatedAt={dataUpdatedAt} />
             <Button variant="outline" onClick={handleRefresh} disabled={isLoading}>
               <RotateCw className={isLoading ? 'animate-spin' : ''} aria-hidden="true" />
@@ -90,7 +164,13 @@ export function DataDashboardPage() {
       <MetricsBar>
         <Metric label={t('dataDashboard.metricRequests')}>
           <MetricValue value={(totals?.requests ?? 0).toLocaleString(localeTag())} />
-          <MetricFoot className="truncate">{t('dataDashboard.rangeHours', { hours: data?.hours ?? Number(range) })}</MetricFoot>
+          <MetricFoot className="truncate">
+            {query
+              ? query.start !== undefined
+                ? `${new Date(query.start * 1000).toLocaleString(localeTag(), { dateStyle: 'short', timeStyle: 'short' })} — ${new Date((query.end ?? 0) * 1000).toLocaleString(localeTag(), { dateStyle: 'short', timeStyle: 'short' })}`
+                : t('dataDashboard.rangeHours', { hours: query.hours ?? 0 })
+              : t('dataDashboard.customPending')}
+          </MetricFoot>
         </Metric>
         <Metric label={t('dataDashboard.metricTokens')}>
           <MetricValue value={compactTokens(totals?.inputTokens ?? 0)} unit={t('dataDashboard.tokensIn')} />

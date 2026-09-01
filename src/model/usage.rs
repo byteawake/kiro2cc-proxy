@@ -898,9 +898,13 @@ pub struct DashboardTotals {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DashboardSnapshot {
-    /// 实际统计的小时数（1-720）
-    pub hours: i64,
-    /// "hour"（hours ≤ 72）或 "day"
+    /// 区间起点（Unix 秒，客户端传入的原值）
+    pub from: i64,
+    /// 区间终点（Unix 秒）
+    pub to: i64,
+    /// 筛选的 API Key ID（None = 全部）
+    pub api_key_id: Option<u32>,
+    /// "hour"（区间 ≤ 72h）或 "day"
     pub granularity: &'static str,
     /// CST 桶序列，按时间升序
     pub series: Vec<DashboardBucket>,
@@ -914,18 +918,19 @@ pub struct DashboardSnapshot {
 }
 
 impl UsageTracker {
-    /// 数据看板：聚合最近 `hours` 小时（1-720，CST 时区）的用量记录
-    ///
-    /// ≤72 小时按小时分桶、更长按天分桶；模型 / Key / 账号切片按 credits 降序。
+    /// 数据看板：聚合 `[start, end]`（Unix 秒，CST 时区分桶）的用量记录，
+    /// 可按 API Key 过滤；≤72 小时按小时分桶、更长按天分桶；切片按 credits 降序。
     pub fn get_dashboard_snapshot(
         &self,
-        hours: i64,
+        start: chrono::DateTime<Utc>,
+        end: chrono::DateTime<Utc>,
+        api_key_id: Option<u32>,
         credential_labels: &std::collections::HashMap<u64, String>,
     ) -> DashboardSnapshot {
-        let hours = hours.clamp(1, 720);
-        let granularity: &'static str = if hours <= 72 { "hour" } else { "day" };
+        let span_hours = (end - start).num_hours().max(1);
+        let granularity: &'static str = if span_hours <= 72 { "hour" } else { "day" };
         let cst = FixedOffset::east_opt(8 * 3600).unwrap();
-        let from = chrono::Utc::now() - chrono::Duration::hours(hours);
+        let from = start;
 
         #[derive(Default)]
         struct Agg {
@@ -953,7 +958,11 @@ impl UsageTracker {
         let mut by_credential: std::collections::BTreeMap<u64, Agg> = Default::default();
 
         let records = self.records.read();
-        for r in records.iter().filter(|r| r.created_at >= from) {
+        for r in records
+            .iter()
+            .filter(|r| r.created_at >= from && r.created_at <= end)
+            .filter(|r| api_key_id.is_none_or(|id| r.api_key_id == id))
+        {
             let cst_time = r.created_at.with_timezone(&cst);
             let bucket_key = if granularity == "hour" {
                 cst_time.format("%m-%d %H:00").to_string()
@@ -1024,7 +1033,9 @@ impl UsageTracker {
         }
 
         DashboardSnapshot {
-            hours,
+            from: start.timestamp(),
+            to: end.timestamp(),
+            api_key_id,
             granularity,
             series: buckets
                 .into_iter()
@@ -1170,7 +1181,8 @@ mod tests {
         tracker.record(3, Some(2), "claude-sonnet-5".to_string(), 50, 5, None, Some(0.1), None, None);
 
         let labels = std::collections::HashMap::from([(2u64, "账号A".to_string())]);
-        let snap = tracker.get_dashboard_snapshot(1, &labels);
+        let now = chrono::Utc::now();
+        let snap = tracker.get_dashboard_snapshot(now - chrono::Duration::hours(1), now, None, &labels);
         assert_eq!(snap.granularity, "hour");
         assert_eq!(snap.totals.requests, 3);
         assert_eq!(snap.totals.input_tokens, 350);

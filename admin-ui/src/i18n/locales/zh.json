@@ -726,6 +726,12 @@
     "colShare": "占比",
     "shareOf": "Top {{count}} 占区间 Credits {{percent}}",
     "empty": "区间内暂无数据",
-    "toastRefreshed": "看板已刷新"
+    "toastRefreshed": "看板已刷新",
+    "custom": "自定义",
+    "startLabel": "开始时间",
+    "endLabel": "结束时间",
+    "keyFilterLabel": "按 API Key 筛选",
+    "allKeys": "全部 API Keys",
+    "customPending": "请选择有效的自定义区间"
   }
 }

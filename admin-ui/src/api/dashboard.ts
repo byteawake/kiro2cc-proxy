@@ -18,10 +18,15 @@ api.interceptors.request.use((config) => {
   return config
 })
 
-/** 数据看板聚合快照（hours: 统计最近 N 小时，1-720） */
-export async function getDashboard(hours: number): Promise<DashboardResponse> {
-  const { data } = await api.get<DashboardResponse>('/dashboard', {
-    params: { hours },
-  })
+/** 看板查询参数：预设 hours 或自定义 start/end（Unix 秒），可选按 Key 过滤 */
+export interface DashboardQuery {
+  hours?: number
+  start?: number
+  end?: number
+  apiKey?: number
+}
+
+export async function getDashboard(query: DashboardQuery): Promise<DashboardResponse> {
+  const { data } = await api.get<DashboardResponse>('/dashboard', { params: query })
   return data
 }

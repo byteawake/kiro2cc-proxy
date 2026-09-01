@@ -364,7 +364,12 @@ export interface DashboardBucket {
 }
 
 export interface DashboardSnapshot {
-  hours: number
+  /** 区间起点（Unix 秒，客户端传入原值） */
+  from: number
+  /** 区间终点（Unix 秒） */
+  to: number
+  /** 筛选的 API Key ID（null = 全部） */
+  apiKeyId: number | null
   granularity: 'hour' | 'day'
   series: DashboardBucket[]
   byModel: DashboardSlice[]
