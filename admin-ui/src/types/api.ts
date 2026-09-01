@@ -341,3 +341,47 @@ export interface SsoSessionResponse {
   email?: string
   error?: string
 }
+
+// ===== 数据看板（后端 /api/admin/dashboard，src/admin/dashboard.rs） =====
+
+/** 单维度切片（模型 / API Key / 账号），credits 降序 */
+export interface DashboardSlice {
+  /** 模型名、Key 名（"#id" 兜底）或账号标签（"#id" 兜底） */
+  name: string
+  requests: number
+  inputTokens: number
+  outputTokens: number
+  credits: number
+}
+
+/** 时间桶：小时粒度 bucket 形如 "08-31 14:00"，天粒度 "2026-08-31"（CST） */
+export interface DashboardBucket {
+  bucket: string
+  requests: number
+  inputTokens: number
+  outputTokens: number
+  credits: number
+}
+
+export interface DashboardSnapshot {
+  hours: number
+  granularity: 'hour' | 'day'
+  series: DashboardBucket[]
+  byModel: DashboardSlice[]
+  byApiKey: DashboardSlice[]
+  byCredential: DashboardSlice[]
+  totals: {
+    requests: number
+    inputTokens: number
+    outputTokens: number
+    cacheReadTokens: number
+    cacheCreationTokens: number
+    cost: number
+    credits: number
+  }
+}
+
+/** 快照 + 服务端生成时间 */
+export interface DashboardResponse extends DashboardSnapshot {
+  generatedAt: string
+}

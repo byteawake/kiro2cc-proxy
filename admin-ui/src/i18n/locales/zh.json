@@ -102,7 +102,8 @@
     "toastSelectToVerify": "请先选择要验活的账号",
     "toastVerifyCancelled": "已取消验活",
     "toastVerifyDone": "验活完成：成功 {{success}}/{{total}}",
-    "ssoImport": "AWS SSO 登录导入"
+    "ssoImport": "AWS SSO 登录导入",
+    "navDataDashboard": "数据看板"
   },
   "credentials": {
     "metricPoolLabel": "账号池",
@@ -689,5 +690,42 @@
     "themeDark": "深色",
     "sidebarCollapsed": "侧栏收起",
     "sidebarCollapsedDesc": "立即将左侧导航收起为图标态，偏好保存在本地浏览器。"
+  },
+  "dataDashboard": {
+    "pageTitle": "数据看板",
+    "headNote": "基于逐请求用量记录实时聚合（30s 刷新）",
+    "rangeGroupLabel": "时间范围",
+    "range24h": "近24小时",
+    "range72h": "近72小时",
+    "range7d": "近7天",
+    "range30d": "近30天",
+    "rangeHours": "最近 {{hours}} 小时",
+    "metricRequests": "请求次数",
+    "metricTokens": "Tokens 消耗",
+    "tokensIn": "输入",
+    "tokensOut": "输出",
+    "tokensCache": "缓存",
+    "metricCredits": "Credits 消耗",
+    "liveMetering": "来自上游 meteringEvent 真值",
+    "metricCost": "估算费用",
+    "costNote": "按内置模型定价表估算（美元）",
+    "trendTitle": "趋势",
+    "trendSub": "{{granularity}}粒度 · 柱=请求次数 · 线=Credits",
+    "granHour": "小时",
+    "granDay": "天",
+    "legendRequests": "请求",
+    "legendCredits": "Credits",
+    "modelShare": "模型分布",
+    "credShare": "账号分布",
+    "keysTitle": "API Keys 排行（按 Credits）",
+    "colName": "名称",
+    "colRequests": "请求",
+    "colTokensIn": "输入 Tokens",
+    "colTokensOut": "输出 Tokens",
+    "colCredits": "Credits",
+    "colShare": "占比",
+    "shareOf": "Top {{count}} 占区间 Credits {{percent}}",
+    "empty": "区间内暂无数据",
+    "toastRefreshed": "看板已刷新"
   }
 }

@@ -102,7 +102,8 @@
     "toastSelectToVerify": "Please select accounts to verify first",
     "toastVerifyCancelled": "Verification cancelled",
     "toastVerifyDone": "Verification complete: {{success}}/{{total}} succeeded",
-    "ssoImport": "AWS SSO Import"
+    "ssoImport": "AWS SSO Import",
+    "navDataDashboard": "Data Dashboard"
   },
   "credentials": {
     "metricPoolLabel": "Account pool",
@@ -689,5 +690,42 @@
     "themeDark": "Dark",
     "sidebarCollapsed": "Collapse Sidebar",
     "sidebarCollapsedDesc": "Immediately collapses the left navigation to icon mode; the preference is stored in your browser."
+  },
+  "dataDashboard": {
+    "pageTitle": "Data Dashboard",
+    "headNote": "Aggregated live from per-request usage records (30s refresh)",
+    "rangeGroupLabel": "Time range",
+    "range24h": "Last 24h",
+    "range72h": "Last 72h",
+    "range7d": "Last 7 days",
+    "range30d": "Last 30 days",
+    "rangeHours": "Last {{hours}} hours",
+    "metricRequests": "Requests",
+    "metricTokens": "Tokens",
+    "tokensIn": "Input",
+    "tokensOut": "Output",
+    "tokensCache": "Cache",
+    "metricCredits": "Credits",
+    "liveMetering": "From upstream meteringEvent",
+    "metricCost": "Estimated cost",
+    "costNote": "Estimated with built-in model pricing (USD)",
+    "trendTitle": "Trend",
+    "trendSub": "{{granularity}} buckets · bars = requests · line = credits",
+    "granHour": "Hourly",
+    "granDay": "Daily",
+    "legendRequests": "Requests",
+    "legendCredits": "Credits",
+    "modelShare": "By Model",
+    "credShare": "By Credential",
+    "keysTitle": "Top API Keys (by credits)",
+    "colName": "Name",
+    "colRequests": "Requests",
+    "colTokensIn": "Input Tokens",
+    "colTokensOut": "Output Tokens",
+    "colCredits": "Credits",
+    "colShare": "Share",
+    "shareOf": "Top {{count}} cover {{percent}} of credits",
+    "empty": "No data in this range",
+    "toastRefreshed": "Dashboard refreshed"
   }
 }

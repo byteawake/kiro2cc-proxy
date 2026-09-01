@@ -69,6 +69,7 @@ pub fn create_admin_router(state: AdminState) -> Router {
         .route("/rpm", get(get_rpm))
         .route("/usage/daily", get(get_daily_usage))
         .route("/usage/daily/{date}/records", get(get_daily_usage_records))
+        .route("/dashboard", get(super::dashboard::get_dashboard))
         .route("/geo/batch", get(get_geo_batch))
         // AWS SSO 设备授权自动导入
         .route("/sso/sessions", post(start_sso_session))

@@ -17,13 +17,17 @@ FROM rust:1-alpine AS builder
 RUN apk add --no-cache musl-dev openssl-dev openssl-libs-static
 
 WORKDIR /app
+# 依赖缓存层：先用桩 main 把全部 crates 编译进 target，源码/前端变更不再触发重新下载
+# （网络抖动只影响本层首次构建；命中缓存后离线也能完成最终编译）
 COPY Cargo.toml Cargo.lock* ./
+RUN mkdir src && echo "fn main() {}" > src/main.rs && cargo build --release && rm -rf src
+
 COPY src ./src
 COPY assets ./assets
 COPY --from=frontend-builder /app/admin-ui/dist /app/admin-ui/dist
 COPY --from=frontend-builder /app/user-ui/dist /app/user-ui/dist
 
-RUN cargo build --release
+RUN touch src/main.rs && cargo build --release
 
 FROM alpine:3.21
 

@@ -1,6 +1,6 @@
 // Copyright (c) 2026 Harllan He. Licensed under MIT.
 import { useState, useEffect, useMemo, useRef } from 'react'
-import { RefreshCw, LogOut, Server, Plus, Upload, FileUp, Trash2, CheckCircle2, KeyRound, Key, Settings, BarChart2, ScrollText, Boxes, Sun, Moon, Info, History, PanelLeftClose, PanelLeftOpen, FileText } from 'lucide-react'
+import { RefreshCw, LogOut, Server, Plus, Upload, FileUp, Trash2, CheckCircle2, KeyRound, Key, Settings, BarChart2, ScrollText, Boxes, Sun, Moon, Info, History, PanelLeftClose, PanelLeftOpen, FileText, Gauge } from 'lucide-react'
 import { useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import { useTranslation } from 'react-i18next'
@@ -29,6 +29,7 @@ import { LogViewerPage } from '@/components/log-viewer-page'
 import { useCredentials, useDeleteCredential, useResetFailure, useRpm, useDailyUsage, useServerInfo, CREDENTIALS_REFETCH_INTERVAL_MS } from '@/hooks/use-credentials'
 import { useTheme } from '@/hooks/use-theme'
 import { DailyStatsPage } from '@/components/daily-stats-page'
+import { DataDashboardPage } from '@/components/data-dashboard-page'
 import { ModelListPage } from '@/components/model-list-page'
 import { ChangelogPage } from '@/components/changelog-page'
 import { DailyDetailPage } from '@/components/daily-detail-page'
@@ -88,7 +89,7 @@ function readStoredSidebarCollapsed(): boolean {
 export function Dashboard({ onLogout }: DashboardProps) {
   const { t } = useTranslation()
   const { theme, toggleTheme } = useTheme()
-  const [activeTab, setActiveTab] = useState<'credentials' | 'apikeys' | 'settings' | 'logs' | 'models' | 'changelog'>('credentials')
+  const [activeTab, setActiveTab] = useState<'credentials' | 'apikeys' | 'settings' | 'logs' | 'models' | 'changelog' | 'data'>('credentials')
   const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(readStoredSidebarCollapsed)
   // 侧边栏内容（header/nav/footer 的 flex 方向、间距、文字显隐）无法被 CSS transition 平滑插值，
   // 故延迟到宽度动画半程、内容淡为透明时才瞬切，避免可见的布局跳变
@@ -119,7 +120,7 @@ export function Dashboard({ onLogout }: DashboardProps) {
   const [dailyView, setDailyView] = useState<string | null>(null)
   const [dailyFromSidebar, setDailyFromSidebar] = useState(false)
   const cancelVerifyRef = useRef(false)
-  const prevTabRef = useRef<'credentials' | 'apikeys' | 'settings' | 'logs' | 'models' | 'changelog' | null>(null)
+  const prevTabRef = useRef<'credentials' | 'apikeys' | 'settings' | 'logs' | 'models' | 'changelog' | 'data' | null>(null)
   const prevDetailCredentialId = useRef<number | null>(null)
   const prevDailyView = useRef<string | null>(null)
   const initialBalanceFetchDone = useRef(false)
@@ -920,6 +921,7 @@ export function Dashboard({ onLogout }: DashboardProps) {
         { key: 'credentials', label: t('dashboard.navCredentials'), icon: Server, count: data?.credentials.length, active: activeTab === 'credentials' && dailyView === null, onClick: () => { setActiveTab('credentials'); setDetailKeyId(null); setDetailCredentialId(null); setDailyView(null) } },
         { key: 'apikeys', label: 'API Keys', icon: Key, count: undefined, active: activeTab === 'apikeys', onClick: () => { setActiveTab('apikeys'); setDetailKeyId(null); setDetailCredentialId(null); setDailyView(null) } },
         { key: 'daily', label: t('dashboard.navDailyStats'), icon: BarChart2, count: undefined, active: dailyView !== null, onClick: () => { setActiveTab('credentials'); setDetailKeyId(null); setDetailCredentialId(null); setDailyView('list'); setDailyFromSidebar(true) } },
+        { key: 'data', label: t('dashboard.navDataDashboard'), icon: Gauge, count: undefined, active: activeTab === 'data', onClick: () => { setActiveTab('data'); setDetailKeyId(null); setDetailCredentialId(null); setDailyView(null) } },
         { key: 'models', label: t('dashboard.navModels'), icon: Boxes, count: undefined, active: activeTab === 'models', onClick: () => { setActiveTab('models'); setDetailKeyId(null); setDetailCredentialId(null); setDailyView(null) } },
       ],
     },
@@ -1099,6 +1101,8 @@ export function Dashboard({ onLogout }: DashboardProps) {
             sidebarCollapsed={sidebarCollapsed}
             onToggleSidebarCollapsed={toggleSidebarCollapsed}
           />
+        ) : activeTab === 'data' ? (
+          <DataDashboardPage />
         ) : activeTab === 'models' ? (
           <ModelListPage />
         ) : activeTab === 'changelog' ? (

@@ -854,6 +854,196 @@ impl UsageTracker {
     }
 }
 
+
+/// 数据看板：时间桶聚合（hourly / daily）
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DashboardBucket {
+    /// CST 桶标签：小时粒度 "MM-DD HH:00"，天粒度 "YYYY-MM-DD"
+    pub bucket: String,
+    pub requests: u64,
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+    pub credits: f64,
+}
+
+/// 数据看板：单一维度切片（模型 / API Key / 账号）
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DashboardSlice {
+    /// 模型名、API Key 名（"#id" 兜底）或账号标签（"#id" 兜底）
+    pub name: String,
+    pub requests: u64,
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+    pub credits: f64,
+}
+
+/// 数据看板：区间总量
+#[derive(Debug, Clone, Serialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct DashboardTotals {
+    pub requests: u64,
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+    pub cache_read_tokens: u64,
+    pub cache_creation_tokens: u64,
+    /// 估算费用（美元）
+    pub cost: f64,
+    /// 真实 credits 消耗（旧记录按 estimated_cost × k_ref 回退）
+    pub credits: f64,
+}
+
+/// 数据看板：一次区间聚合的完整快照
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DashboardSnapshot {
+    /// 实际统计的小时数（1-720）
+    pub hours: i64,
+    /// "hour"（hours ≤ 72）或 "day"
+    pub granularity: &'static str,
+    /// CST 桶序列，按时间升序
+    pub series: Vec<DashboardBucket>,
+    /// 按模型，credits 降序
+    pub by_model: Vec<DashboardSlice>,
+    /// 按 API Key（name 为 "#id" 兜底，前端用 Key 列表补名）
+    pub by_api_key: Vec<DashboardSlice>,
+    /// 按账号（label 为服务端 credential_labels 映射，"#id" 兜底）
+    pub by_credential: Vec<DashboardSlice>,
+    pub totals: DashboardTotals,
+}
+
+impl UsageTracker {
+    /// 数据看板：聚合最近 `hours` 小时（1-720，CST 时区）的用量记录
+    ///
+    /// ≤72 小时按小时分桶、更长按天分桶；模型 / Key / 账号切片按 credits 降序。
+    pub fn get_dashboard_snapshot(
+        &self,
+        hours: i64,
+        credential_labels: &std::collections::HashMap<u64, String>,
+    ) -> DashboardSnapshot {
+        let hours = hours.clamp(1, 720);
+        let granularity: &'static str = if hours <= 72 { "hour" } else { "day" };
+        let cst = FixedOffset::east_opt(8 * 3600).unwrap();
+        let from = chrono::Utc::now() - chrono::Duration::hours(hours);
+
+        #[derive(Default)]
+        struct Agg {
+            requests: u64,
+            input: u64,
+            output: u64,
+            credits: f64,
+        }
+
+        impl Agg {
+            fn add(&mut self, r: &UsageRecord) {
+                self.requests += 1;
+                self.input = self.input.saturating_add(r.input_tokens.max(0) as u64);
+                self.output = self.output.saturating_add(r.output_tokens.max(0) as u64);
+                self.credits += r
+                    .credits_used
+                    .unwrap_or(r.estimated_cost * get_k_ref(&r.model));
+            }
+        }
+
+        let mut totals = DashboardTotals::default();
+        let mut buckets: std::collections::BTreeMap<String, Agg> = Default::default();
+        let mut by_model: std::collections::BTreeMap<String, Agg> = Default::default();
+        let mut by_api_key: std::collections::BTreeMap<u32, Agg> = Default::default();
+        let mut by_credential: std::collections::BTreeMap<u64, Agg> = Default::default();
+
+        let records = self.records.read();
+        for r in records.iter().filter(|r| r.created_at >= from) {
+            let cst_time = r.created_at.with_timezone(&cst);
+            let bucket_key = if granularity == "hour" {
+                cst_time.format("%m-%d %H:00").to_string()
+            } else {
+                cst_time.format("%Y-%m-%d").to_string()
+            };
+            buckets.entry(bucket_key).or_default().add(r);
+            by_model.entry(r.model.clone()).or_default().add(r);
+            by_api_key.entry(r.api_key_id).or_default().add(r);
+            if let Some(cid) = r.credential_id {
+                by_credential.entry(cid).or_default().add(r);
+            }
+
+            totals.requests += 1;
+            totals.input_tokens =
+                totals.input_tokens.saturating_add(r.input_tokens.max(0) as u64);
+            totals.output_tokens =
+                totals.output_tokens.saturating_add(r.output_tokens.max(0) as u64);
+            totals.cache_read_tokens = totals
+                .cache_read_tokens
+                .saturating_add(r.cache_read_input_tokens.unwrap_or(0).max(0) as u64);
+            totals.cache_creation_tokens = totals.cache_creation_tokens.saturating_add(
+                (r.cache_creation_input_tokens.unwrap_or(0).max(0) as u64)
+                    .max(r.cache_creation_5m_input_tokens.max(0) as u64)
+                    .max(r.cache_creation_1h_input_tokens.max(0) as u64),
+            );
+            totals.cost += r.estimated_cost;
+            totals.credits += r
+                .credits_used
+                .unwrap_or(r.estimated_cost * get_k_ref(&r.model));
+        }
+        drop(records);
+
+        let make_slice = |name: String, a: &Agg| DashboardSlice {
+            name,
+            requests: a.requests,
+            input_tokens: a.input,
+            output_tokens: a.output,
+            credits: a.credits,
+        };
+
+        let mut by_model: Vec<DashboardSlice> =
+            by_model.into_iter().map(|(m, a)| make_slice(m, &a)).collect();
+        let mut by_api_key: Vec<DashboardSlice> = by_api_key
+            .into_iter()
+            .map(|(id, a)| make_slice(format!("#{id}"), &a))
+            .collect();
+        let mut by_credential: Vec<DashboardSlice> = by_credential
+            .into_iter()
+            .map(|(id, a)| {
+                make_slice(
+                    credential_labels
+                        .get(&id)
+                        .cloned()
+                        .unwrap_or(format!("#{id}")),
+                    &a,
+                )
+            })
+            .collect();
+        // credits 降序，requests 次级稳定排序
+        for list in [&mut by_model, &mut by_api_key, &mut by_credential] {
+            list.sort_by(|a, b| {
+                b.credits
+                    .partial_cmp(&a.credits)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+                    .then(b.requests.cmp(&a.requests))
+            });
+        }
+
+        DashboardSnapshot {
+            hours,
+            granularity,
+            series: buckets
+                .into_iter()
+                .map(|(bucket, a)| DashboardBucket {
+                    bucket,
+                    requests: a.requests,
+                    input_tokens: a.input,
+                    output_tokens: a.output,
+                    credits: a.credits,
+                })
+                .collect(),
+            by_model,
+            by_api_key,
+            by_credential,
+            totals,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -968,6 +1158,28 @@ mod tests {
         );
         let summary = tracker.get_summary(1);
         assert!((summary.total_credits - tracker.get_total_credits(1)).abs() < 1e-9);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[tokio::test]
+    async fn test_dashboard_snapshot_aggregates() {
+        let path = temp_usage_path("dashboard");
+        let tracker = UsageTracker::load(&path).unwrap();
+        tracker.record(1, Some(2), "claude-opus-4.8".to_string(), 100, 10, None, Some(0.5), None, None);
+        tracker.record(1, Some(2), "claude-opus-4.8".to_string(), 200, 20, None, Some(1.0), None, None);
+        tracker.record(3, Some(2), "claude-sonnet-5".to_string(), 50, 5, None, Some(0.1), None, None);
+
+        let labels = std::collections::HashMap::from([(2u64, "账号A".to_string())]);
+        let snap = tracker.get_dashboard_snapshot(1, &labels);
+        assert_eq!(snap.granularity, "hour");
+        assert_eq!(snap.totals.requests, 3);
+        assert_eq!(snap.totals.input_tokens, 350);
+        assert!((snap.totals.credits - 1.6).abs() < 1e-9);
+        assert!(!snap.series.is_empty(), "应有至少一个时间桶");
+        // credits 降序：opus(1.5) 在 sonnet(0.1) 前；账号标签来自映射
+        assert_eq!(snap.by_model[0].name, "claude-opus-4.8");
+        assert_eq!(snap.by_credential[0].name, "账号A");
+        assert_eq!(snap.by_api_key[0].requests, 2);
         let _ = std::fs::remove_file(&path);
     }
 
