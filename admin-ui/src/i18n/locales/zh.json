@@ -710,7 +710,7 @@
     "metricCost": "估算费用",
     "costNote": "按内置模型定价表估算（美元）",
     "trendTitle": "趋势",
-    "trendSub": "{{granularity}}粒度 · 柱=请求次数 · 线=Credits",
+    "trendSub": "按{{granularity}}分桶",
     "granHour": "小时",
     "granDay": "天",
     "legendRequests": "请求",
@@ -732,6 +732,11 @@
     "endLabel": "结束时间",
     "keyFilterLabel": "按 API Key 筛选",
     "allKeys": "全部 API Keys",
-    "customPending": "请选择有效的自定义区间"
+    "customPending": "请选择有效的自定义区间",
+    "trendMetricGroupLabel": "趋势指标",
+    "trendMetricRequests": "请求次数",
+    "trendMetricCredits": "Credits",
+    "trendMetricTokens": "Tokens",
+    "axisMax": "峰值 {{value}}"
   }
 }

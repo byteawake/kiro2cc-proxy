@@ -710,7 +710,7 @@
     "metricCost": "Estimated cost",
     "costNote": "Estimated with built-in model pricing (USD)",
     "trendTitle": "Trend",
-    "trendSub": "{{granularity}} buckets · bars = requests · line = credits",
+    "trendSub": "Buckets by {{granularity}}",
     "granHour": "Hourly",
     "granDay": "Daily",
     "legendRequests": "Requests",
@@ -732,6 +732,11 @@
     "endLabel": "End time",
     "keyFilterLabel": "Filter by API Key",
     "allKeys": "All API Keys",
-    "customPending": "Pick a valid custom range"
+    "customPending": "Pick a valid custom range",
+    "trendMetricGroupLabel": "Trend metric",
+    "trendMetricRequests": "Requests",
+    "trendMetricCredits": "Credits",
+    "trendMetricTokens": "Tokens",
+    "axisMax": "Peak {{value}}"
   }
 }

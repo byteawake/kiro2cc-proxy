@@ -66,6 +66,7 @@ export function DataDashboardPage() {
 
   const { data, isLoading, refetch, dataUpdatedAt } = useDashboard(query)
   const { data: apiKeys } = useApiKeys()
+  const [trendMetric, setTrendMetric] = useState<'requests' | 'credits' | 'tokens'>('requests')
 
   const switchToCustom = () => {
     if (range !== 'custom') {
@@ -209,19 +210,21 @@ export function DataDashboardPage() {
           <div className="text-[11px] text-ink-3">
             {t('dataDashboard.trendSub', { granularity })}
           </div>
-          <div className="ml-auto flex flex-wrap items-center gap-x-[13px] gap-y-1 text-[11px] text-ink-3">
-            <span className="flex items-center gap-[5px]">
-              <i aria-hidden="true" className="block size-[9px] rounded-[2px] bg-brand" />
-              {t('dataDashboard.legendRequests')}
-            </span>
-            <span className="flex items-center gap-[5px]">
-              <i aria-hidden="true" className="block h-[2px] w-[13px] rounded-[1px] bg-ink-3" />
-              {t('dataDashboard.legendCredits')}
-            </span>
+          <div className="ml-auto">
+            <Segmented
+              value={trendMetric}
+              onChange={setTrendMetric}
+              groupLabel={t('dataDashboard.trendMetricGroupLabel')}
+              options={[
+                { key: 'requests', label: t('dataDashboard.trendMetricRequests') },
+                { key: 'credits', label: t('dataDashboard.trendMetricCredits') },
+                { key: 'tokens', label: t('dataDashboard.trendMetricTokens') },
+              ]}
+            />
           </div>
         </div>
         <div className="px-4 pb-3.5 pt-2.5">
-          <TrendChart series={series} />
+          <TrendChart series={series} metric={trendMetric} />
         </div>
       </section>
 
@@ -293,7 +296,13 @@ function sharePct(credits: number, total: number): string {
 }
 
 /** 趋势图：CSS 柱（请求次数）+ 非等比拉伸 SVG 折线（Credits），零图表库依赖 */
-function TrendChart({ series }: { series: DashboardBucket[] }) {
+function TrendChart({
+  series,
+  metric,
+}: {
+  series: DashboardBucket[]
+  metric: 'requests' | 'credits' | 'tokens'
+}) {
   const { t } = useTranslation()
   if (series.length === 0) {
     return (
@@ -303,50 +312,71 @@ function TrendChart({ series }: { series: DashboardBucket[] }) {
     )
   }
 
-  const maxRequests = Math.max(...series.map((s) => s.requests), 1)
-  const maxCredits = Math.max(...series.map((s) => s.credits), 1e-9)
+  const valueOf = (s: DashboardBucket): number =>
+    metric === 'requests' ? s.requests : metric === 'credits' ? s.credits : s.inputTokens + s.outputTokens
+  const fmtValue = (v: number): string => (metric === 'credits' ? fmtCredits(v) : compactTokens(v))
+
+  const maxValue = Math.max(...series.map(valueOf), metric === 'credits' ? 1e-9 : 1)
   // X 轴标签抽稀：目标 ≤12 个
   const labelStep = Math.max(1, Math.ceil(series.length / 12))
 
-  const linePoints = series
-    .map((s, i) => {
-      const x = series.length === 1 ? 50 : (i / (series.length - 1)) * 100
-      const y = 100 - (s.credits / maxCredits) * 100
-      return `${x.toFixed(2)},${y.toFixed(2)}`
-    })
-    .join(' ')
+  const tooltip = (s: DashboardBucket): string => {
+    if (metric === 'tokens') {
+      return `${s.bucket} · ${t('dataDashboard.tokensIn')} ${compactTokens(s.inputTokens)} · ${t('dataDashboard.tokensOut')} ${compactTokens(s.outputTokens)}`
+    }
+    return `${s.bucket} · ${fmtValue(valueOf(s))}`
+  }
 
   return (
     <div>
+      {/* 单指标单轴：峰值是纵轴唯一参考值；Tokens 档附输入/输出图例 */}
+      <div className="ml-[44px] flex items-center justify-between text-[10.5px] text-ink-3">
+        <span className="tabular-nums">{t('dataDashboard.axisMax', { value: fmtValue(maxValue) })}</span>
+        {metric === 'tokens' && (
+          <span className="flex items-center gap-[10px] pr-1">
+            <span className="flex items-center gap-[5px]">
+              <i aria-hidden="true" className="block size-[9px] rounded-[2px]" style={{ background: 'var(--brand)' }} />
+              {t('dataDashboard.tokensIn')}
+            </span>
+            <span className="flex items-center gap-[5px]">
+              <i aria-hidden="true" className="block size-[9px] rounded-[2px]" style={{ background: 'var(--brand-hover)' }} />
+              {t('dataDashboard.tokensOut')}
+            </span>
+          </span>
+        )}
+      </div>
       <div className="relative ml-[44px] flex h-[184px] items-end gap-[2px]">
-        {/* 折线覆盖层：坐标按百分比归一，non-scaling-stroke 保线宽 */}
-        <svg
-          aria-hidden="true"
-          className="pointer-events-none absolute inset-0 z-10 h-full w-full overflow-visible"
-          viewBox="0 0 100 100"
-          preserveAspectRatio="none"
-        >
-          <polyline
-            points={linePoints}
-            fill="none"
-            stroke="currentColor"
-            className="text-ink-3 [&_line]:hidden"
-            vectorEffect="non-scaling-stroke"
-            strokeWidth="1.5"
-          />
-        </svg>
         {series.map((s) => {
-          const h = (s.requests / maxRequests) * 100
+          const total = valueOf(s)
+          const h = (total / maxValue) * 100
+          const stacked = metric === 'tokens'
+          const outH = stacked ? (s.outputTokens / maxValue) * 100 : 0
+          const inH = stacked ? h - outH : h
           return (
             <div
               key={s.bucket}
-              className="group relative flex h-full flex-1 items-end"
-              title={`${s.bucket} · ${t('dataDashboard.legendRequests')} ${s.requests.toLocaleString(localeTag())} · ${t('dataDashboard.legendCredits')} ${fmtCredits(s.credits)}`}
+              className="group relative flex h-full flex-1 cursor-default flex-col justify-end"
+              title={tooltip(s)}
             >
-              <div
-                className="w-full rounded-t-[3px] bg-brand transition-colors group-hover:bg-brand-hover"
-                style={{ height: `${Math.max(s.requests > 0 ? 2 : 0, h)}%` }}
-              />
+              {stacked ? (
+                <>
+                  {s.outputTokens > 0 && (
+                    <div
+                      className="w-full rounded-t-[3px]"
+                      style={{ height: `${Math.max(outH, 1)}%`, background: 'var(--brand-hover)' }}
+                    />
+                  )}
+                  <div
+                    className={`w-full transition-opacity group-hover:opacity-80 ${s.outputTokens > 0 ? '' : 'rounded-t-[3px]'}`}
+                    style={{ height: `${Math.max(total > 0 ? 2 : 0, inH)}%`, background: 'var(--brand)' }}
+                  />
+                </>
+              ) : (
+                <div
+                  className="w-full rounded-t-[3px] bg-brand transition-colors group-hover:bg-brand-hover"
+                  style={{ height: `${Math.max(total > 0 ? 2 : 0, h)}%` }}
+                />
+              )}
             </div>
           )
         })}
