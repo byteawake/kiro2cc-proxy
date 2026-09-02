@@ -53,15 +53,15 @@ export function DataDashboardPage() {
 
   // 自定义区间 → Unix 秒；未就绪/非法时返回 null 暂停查询
   const query: DashboardQuery | null = useMemo(() => {
-    const apiKey = apiKeyFilter === '' ? undefined : Number(apiKeyFilter)
+    const api_key = apiKeyFilter === '' ? undefined : Number(apiKeyFilter)
     if (range === 'custom') {
       if (startLocal === '' || endLocal === '') return null
       const start = Math.floor(new Date(startLocal).getTime() / 1000)
       const end = Math.floor(new Date(endLocal).getTime() / 1000)
       if (!Number.isFinite(start) || !Number.isFinite(end) || start >= end) return null
-      return { start, end, apiKey }
+      return { start, end, api_key }
     }
-    return { hours: Number(range), apiKey }
+    return { hours: Number(range), api_key }
   }, [range, startLocal, endLocal, apiKeyFilter])
 
   const { data, isLoading, refetch, dataUpdatedAt } = useDashboard(query)

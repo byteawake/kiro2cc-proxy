@@ -18,12 +18,13 @@ api.interceptors.request.use((config) => {
   return config
 })
 
-/** 看板查询参数：预设 hours 或自定义 start/end（Unix 秒），可选按 Key 过滤 */
+/** 看板查询参数：预设 hours 或自定义 start/end（Unix 秒），可选按 Key 过滤。
+ *  字段名与后端 Query 参数一一对应（api_key 为下划线，勿改驼峰） */
 export interface DashboardQuery {
   hours?: number
   start?: number
   end?: number
-  apiKey?: number
+  api_key?: number
 }
 
 export async function getDashboard(query: DashboardQuery): Promise<DashboardResponse> {
