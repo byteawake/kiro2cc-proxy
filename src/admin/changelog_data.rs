@@ -68,6 +68,41 @@ const CURRENT_VERSION: &str = env!("CARGO_PKG_VERSION");
 pub fn build_release_notes() -> Vec<ReleaseNote> {
     let mut notes = vec![
         ReleaseNote {
+            version: "3.1.4".to_string(),
+            date: "2026-09-02".to_string(),
+            is_latest: true,
+            groups: vec![
+                feat_group(vec![Bilingual::new(
+                    "新增管理端「数据看板」：请求 / Credits / Tokens 时间序列，模型、API Key、账号三维用量切片，支持自定义时间区间与按 Key 筛选",
+                    "Added an admin Data Dashboard: request/credits/tokens time series with per-model, per-key and per-credential slices, custom time ranges and per-key filtering",
+                )]),
+                improve_group(vec![
+                    Bilingual::new(
+                        "趋势图支持指标切换（请求 / Credits / Tokens），同日按小时全展示、跨天按天零填充",
+                        "Trend chart gained metric switching (requests/credits/tokens); same-day ranges show all 24 hourly buckets, cross-day ranges show zero-filled daily buckets",
+                    ),
+                    Bilingual::new(
+                        "镜像构建分层缓存 Rust 依赖，源码变更不再触发 crates.io 重新下载",
+                        "Docker builds now cache crate dependencies in a separate layer; source changes no longer re-download crates.io",
+                    ),
+                ]),
+                fix_group(vec![
+                    Bilingual::new(
+                        "长输出不再被 max_output_tokens 截断：thinking 预算计入上游信封、默认上限对齐模型目录（64K/128K）、max_tokens 统一 1024 下限",
+                        "Long outputs no longer hit max_output_tokens truncation: thinking budget added to the upstream envelope, default caps aligned with the model catalog (64K/128K), and a 1024 floor for max_tokens",
+                    ),
+                    Bilingual::new(
+                        "上下文窗口耗尽不再误报为 max_output_tokens，改为 response.failed 如实上报，Codex 端显示压缩会话指引",
+                        "Context-window exhaustion is no longer misreported as max_output_tokens; streams end with response.failed so Codex shows compaction guidance",
+                    ),
+                    Bilingual::new(
+                        "修复看板 API Key 筛选失效（前后端参数名不一致导致过滤被静默忽略）",
+                        "Fixed the dashboard API key filter (frontend/backend parameter name mismatch silently ignored the filter)",
+                    ),
+                ]),
+            ],
+        },
+        ReleaseNote {
             version: "3.0.1".to_string(),
             date: "2026-08-21".to_string(),
             is_latest: false,
