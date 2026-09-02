@@ -4,7 +4,7 @@
 //! 记录每个 API Key 的请求用量（input/output tokens），并根据模型定价估算费用。
 //! 数据持久化到 `api_key_usage.json`。
 
-use chrono::{DateTime, FixedOffset, Utc};
+use chrono::{DateTime, FixedOffset, Timelike, Utc};
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -904,7 +904,7 @@ pub struct DashboardSnapshot {
     pub to: i64,
     /// 筛选的 API Key ID（None = 全部）
     pub api_key_id: Option<u32>,
-    /// "hour"（区间 ≤ 72h）或 "day"
+    /// "hour"（起止同一天）或 "day"（跨天）；桶序列零填充，不跳过空白时段
     pub granularity: &'static str,
     /// CST 桶序列，按时间升序
     pub series: Vec<DashboardBucket>,
@@ -918,8 +918,10 @@ pub struct DashboardSnapshot {
 }
 
 impl UsageTracker {
-    /// 数据看板：聚合 `[start, end]`（Unix 秒，CST 时区分桶）的用量记录，
-    /// 可按 API Key 过滤；≤72 小时按小时分桶、更长按天分桶；切片按 credits 降序。
+    /// 数据看板：聚合 `[start, end]`（Unix 秒）的用量记录，可按 API Key 过滤。
+    ///
+    /// 分桶规则（CST）：起止同一天 → 按小时且当日 24 小时全展示；跨天 → 按天且
+    /// 每天一根柱。桶序列**零填充**——空白时段照常出现，客户端不会误读为缺数据。
     pub fn get_dashboard_snapshot(
         &self,
         start: chrono::DateTime<Utc>,
@@ -927,10 +929,38 @@ impl UsageTracker {
         api_key_id: Option<u32>,
         credential_labels: &std::collections::HashMap<u64, String>,
     ) -> DashboardSnapshot {
-        let span_hours = (end - start).num_hours().max(1);
-        let granularity: &'static str = if span_hours <= 72 { "hour" } else { "day" };
         let cst = FixedOffset::east_opt(8 * 3600).unwrap();
+        let start_cst = start.with_timezone(&cst);
+        let end_cst = end.with_timezone(&cst);
+        let same_day = start_cst.date_naive() == end_cst.date_naive();
+        let granularity: &'static str = if same_day { "hour" } else { "day" };
         let from = start;
+
+        // 预生成完整桶序列（含无数据的空白桶）
+        let mut order: Vec<String> = Vec::new();
+        if same_day {
+            let mut t = start_cst
+                .with_minute(0)
+                .and_then(|t| t.with_second(0))
+                .and_then(|t| t.with_nanosecond(0))
+                .unwrap();
+            let end_floor = end_cst
+                .with_minute(0)
+                .and_then(|t| t.with_second(0))
+                .and_then(|t| t.with_nanosecond(0))
+                .unwrap();
+            while t <= end_floor {
+                order.push(t.format("%m-%d %H:00").to_string());
+                t += chrono::Duration::hours(1);
+            }
+        } else {
+            let mut d = start_cst.date_naive();
+            let end_date = end_cst.date_naive();
+            while d <= end_date {
+                order.push(d.format("%Y-%m-%d").to_string());
+                d += chrono::Duration::days(1);
+            }
+        }
 
         #[derive(Default)]
         struct Agg {
@@ -1037,14 +1067,17 @@ impl UsageTracker {
             to: end.timestamp(),
             api_key_id,
             granularity,
-            series: buckets
+            series: order
                 .into_iter()
-                .map(|(bucket, a)| DashboardBucket {
-                    bucket,
-                    requests: a.requests,
-                    input_tokens: a.input,
-                    output_tokens: a.output,
-                    credits: a.credits,
+                .map(|bucket| {
+                    let a = buckets.remove(&bucket).unwrap_or_default();
+                    DashboardBucket {
+                        bucket,
+                        requests: a.requests,
+                        input_tokens: a.input,
+                        output_tokens: a.output,
+                        credits: a.credits,
+                    }
                 })
                 .collect(),
             by_model,
@@ -1182,13 +1215,40 @@ mod tests {
 
         let labels = std::collections::HashMap::from([(2u64, "账号A".to_string())]);
         let now = chrono::Utc::now();
-        let snap = tracker.get_dashboard_snapshot(now - chrono::Duration::hours(1), now, None, &labels);
+        let cst = FixedOffset::east_opt(8 * 3600).unwrap();
+        let day = now.with_timezone(&cst).date_naive();
+        let cst_day = |h: u32, m: u32| {
+            day.and_hms_opt(h, m, 0)
+                .unwrap()
+                .and_local_timezone(cst)
+                .single()
+                .unwrap()
+                .with_timezone(&Utc)
+        };
+
+        // 同日：当日 24 个小时桶全展示（含零填充空桶），数据落在真实当前时刻
+        let snap = tracker.get_dashboard_snapshot(cst_day(0, 0), cst_day(23, 59), None, &labels);
         assert_eq!(snap.granularity, "hour");
+        assert_eq!(snap.series.len(), 24, "同日应展示全部 24 小时");
         assert_eq!(snap.totals.requests, 3);
         assert_eq!(snap.totals.input_tokens, 350);
         assert!((snap.totals.credits - 1.6).abs() < 1e-9);
-        assert!(!snap.series.is_empty(), "应有至少一个时间桶");
+        assert_eq!(snap.series.iter().map(|b| b.requests).sum::<u64>(), 3);
+
+        // 跨天：每天一根柱，空白日零填充
+        let snap = tracker.get_dashboard_snapshot(
+            cst_day(0, 0) - chrono::Duration::days(4),
+            cst_day(23, 59),
+            None,
+            &labels,
+        );
+        assert_eq!(snap.granularity, "day");
+        assert_eq!(snap.series.len(), 5, "5 天窗口应有 5 根柱（含零填充）");
+        assert_eq!(snap.series[0].requests, 0, "最早一天无数据，应零填充而非缺桶");
+        assert_eq!(snap.series[4].requests, 3);
+
         // credits 降序：opus(1.5) 在 sonnet(0.1) 前；账号标签来自映射
+        let snap = tracker.get_dashboard_snapshot(cst_day(0, 0), cst_day(23, 59), None, &labels);
         assert_eq!(snap.by_model[0].name, "claude-opus-4.8");
         assert_eq!(snap.by_credential[0].name, "账号A");
         assert_eq!(snap.by_api_key[0].requests, 2);
