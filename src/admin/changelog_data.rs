@@ -103,6 +103,227 @@ pub fn build_release_notes() -> Vec<ReleaseNote> {
             ],
         },
         ReleaseNote {
+            version: "3.0.18".to_string(),
+            date: "2026-08-31".to_string(),
+            is_latest: false,
+            groups: vec![
+                fix_group(vec![
+                    Bilingual::new(
+                        "Codex 客户端不解析裸 error 事件，流终止改用 response.failed 如实上报失败原因",
+                        "Codex ignores bare error events; stream termination now uses response.failed to surface the real failure reason",
+                    ),
+                ]),
+            ],
+        },
+        ReleaseNote {
+            version: "3.0.17".to_string(),
+            date: "2026-08-31".to_string(),
+            is_latest: false,
+            groups: vec![
+                fix_group(vec![
+                    Bilingual::new(
+                        "上下文窗口耗尽不再误报为 max_output_tokens，如实区分「上下文超限」与「输出截断」",
+                        "context-window exhaustion is no longer misreported as max_output_tokens; it is now distinguished from output truncation",
+                    ),
+                ]),
+            ],
+        },
+        ReleaseNote {
+            version: "3.0.16".to_string(),
+            date: "2026-08-31".to_string(),
+            is_latest: false,
+            groups: vec![
+                fix_group(vec![
+                    Bilingual::new(
+                        "长输出不再被 max_output_tokens 截断：thinking 预算计入上游信封、默认上限对齐模型目录（64K/128K）、max_tokens 统一 1024 下限",
+                        "long outputs no longer truncate at max_output_tokens: thinking budget added to the upstream envelope, default caps aligned with the model catalog (64K/128K), and a 1024 floor for max_tokens",
+                    ),
+                ]),
+            ],
+        },
+        ReleaseNote {
+            version: "3.0.15".to_string(),
+            date: "2026-08-27".to_string(),
+            is_latest: false,
+            groups: vec![
+                fix_group(vec![
+                    Bilingual::new(
+                        "修复 OpenAI 兼容端点截断流的 finish/usage 缺陷，静态模型表同步上游实时目录",
+                        "fixed truncated-stream finish/usage defects on the OpenAI-compatible endpoint and synced the static model catalog with the live directory",
+                    ),
+                ]),
+            ],
+        },
+        ReleaseNote {
+            version: "3.0.13".to_string(),
+            date: "2026-08-27".to_string(),
+            is_latest: false,
+            groups: vec![
+                feat_group(vec![
+                    Bilingual::new(
+                        "AWS SSO 设备授权导入与 IdC profileArn 自动解析",
+                        "AWS SSO device-authorization import and automatic IdC profileArn resolution",
+                    ),
+                ]),
+            ],
+        },
+        ReleaseNote {
+            version: "3.0.12".to_string(),
+            date: "2026-08-27".to_string(),
+            is_latest: false,
+            groups: vec![
+                fix_group(vec![
+                    Bilingual::new(
+                        "修复企业版 IdC 账号 getUsageLimits 返回 403 Invalid token",
+                        "fixed 403 Invalid token from getUsageLimits for enterprise IdC accounts",
+                    ),
+                ]),
+            ],
+        },
+        ReleaseNote {
+            version: "3.0.11".to_string(),
+            date: "2026-08-26".to_string(),
+            is_latest: false,
+            groups: vec![
+                fix_group(vec![
+                    Bilingual::new(
+                        "更新日志页头固定并在滚动时置顶",
+                        "pinned the changelog page header on scroll",
+                    ),
+                ]),
+            ],
+        },
+        ReleaseNote {
+            version: "3.0.10".to_string(),
+            date: "2026-08-25".to_string(),
+            is_latest: false,
+            groups: vec![
+                fix_group(vec![
+                    Bilingual::new(
+                        "额度耗尽账号在状态徽章误显示为「已禁用」",
+                        "exhausted accounts no longer show a misleading disabled status badge",
+                    ),
+                ]),
+            ],
+        },
+        ReleaseNote {
+            version: "3.0.9".to_string(),
+            date: "2026-08-25".to_string(),
+            is_latest: false,
+            groups: vec![
+                fix_group(vec![
+                    Bilingual::new(
+                        "积分消耗趋势图标注所有非零消耗日的数值",
+                        "the credits trend chart now labels every non-zero day",
+                    ),
+                ]),
+            ],
+        },
+        ReleaseNote {
+            version: "3.0.8".to_string(),
+            date: "2026-08-25".to_string(),
+            is_latest: false,
+            groups: vec![
+                fix_group(vec![
+                    Bilingual::new(
+                        "上游 HTTP 超时从 180s 提高至 1000s，修复大上下文非流式请求 502",
+                        "upstream HTTP timeout raised from 180s to 1000s, fixing 502s on large non-streaming requests",
+                    ),
+                ]),
+            ],
+        },
+        ReleaseNote {
+            version: "3.0.7".to_string(),
+            date: "2026-08-24".to_string(),
+            is_latest: false,
+            groups: vec![
+                feat_group(vec![
+                    Bilingual::new(
+                        "区分 Claude Code 与 Codex 双 Base URL 并补充兼容协议标签",
+                        "separate Claude Code / Codex base URLs with compatibility-protocol badges",
+                    ),
+                ]),
+                fix_group(vec![
+                    Bilingual::new(
+                        "事件日志响应摘要列宽拉伸至填满右侧空白",
+                        "event log response-summary column now stretches to fill the row",
+                    ),
+                ]),
+            ],
+        },
+        ReleaseNote {
+            version: "3.0.5".to_string(),
+            date: "2026-08-23".to_string(),
+            is_latest: false,
+            groups: vec![
+                fix_group(vec![
+                    Bilingual::new(
+                        "更新日志当前版本改为动态获取与判断",
+                        "current-version detection for the changelog is now dynamic",
+                    ),
+                ]),
+            ],
+        },
+        ReleaseNote {
+            version: "3.0.4".to_string(),
+            date: "2026-08-23".to_string(),
+            is_latest: false,
+            groups: vec![
+                improve_group(vec![
+                    Bilingual::new(
+                        "token 计数改用 tiktoken-rs 内置 cl100k_base 单例，减少重复实现",
+                        "token counting now uses the tiktoken-rs built-in cl100k_base singleton to remove duplicated code",
+                    ),
+                ]),
+            ],
+        },
+        ReleaseNote {
+            version: "3.0.3".to_string(),
+            date: "2026-08-23".to_string(),
+            is_latest: false,
+            groups: vec![
+                feat_group(vec![
+                    Bilingual::new(
+                        "引入 tiktoken-rs cl100k_base 替换本地 token 估算公式",
+                        "replaced the local token estimation formula with tiktoken-rs cl100k_base",
+                    ),
+                ]),
+                fix_group(vec![
+                    Bilingual::new(
+                        "侧边栏折叠动画交叉淡化扩展至导航与页脚区域，消除切换卡顿",
+                        "sidebar collapse cross-fade now covers nav and footer, removing the switch flicker",
+                    ),
+                ]),
+            ],
+        },
+        ReleaseNote {
+            version: "3.0.2".to_string(),
+            date: "2026-08-21".to_string(),
+            is_latest: false,
+            groups: vec![
+                fix_group(vec![
+                    Bilingual::new(
+                        "登录页密码框移除 autoFocus，避免打开页面即触发输入法切换",
+                        "removed autoFocus on the login password field to avoid IME switching on open",
+                    ),
+                    Bilingual::new(
+                        "修复 OpenAI 流式转换孤儿 tool_call 与 SSE 溢出日志缺陷",
+                        "fixed orphaned tool_call and SSE overflow logging in the OpenAI streaming conversion",
+                    ),
+                    Bilingual::new(
+                        "输出 token 上报改为可见输出口径，超窗错误文案对齐 Anthropic 官方格式，/cc/v1 改为实时流式转发",
+                        "client-facing output tokens report visible output only, context-overflow copy aligned with Anthropic, and /cc/v1 now streams in real time",
+                    ),
+                ]),
+                improve_group(vec![
+                    Bilingual::new(
+                        "Admin/User 前端图标改用 Aurora Prism 方案，侧边栏 logo 路径改走 BASE_URL",
+                        "Aurora Prism icon set for Admin/User frontends; sidebar logo served via BASE_URL",
+                    ),
+                ]),
+            ],
+        },
+        ReleaseNote {
             version: "3.0.1".to_string(),
             date: "2026-08-21".to_string(),
             is_latest: false,
@@ -149,6 +370,29 @@ pub fn build_release_notes() -> Vec<ReleaseNote> {
             ],
         },
         ReleaseNote {
+            version: "2.10.1".to_string(),
+            date: "2026-08-19".to_string(),
+            is_latest: false,
+            groups: vec![
+                feat_group(vec![
+                    Bilingual::new(
+                        "指标条新增「今日消耗积分」卡片",
+                        "metrics bar gained a today's credits card",
+                    ),
+                ]),
+                fix_group(vec![
+                    Bilingual::new(
+                        "fallback 会话 ID 纳入首条消息避免跨会话折叠，429 不再立即解绑会话，端点全封时避让重试其它账号",
+                        "fallback session IDs include the first message to avoid cross-session folding, 429 no longer unbinds sticky sessions, and full endpoint blackouts yield to other accounts",
+                    ),
+                    Bilingual::new(
+                        "每日统计表由积分降序改为日期降序",
+                        "daily stats table now sorts by date descending",
+                    ),
+                ]),
+            ],
+        },
+        ReleaseNote {
             version: "2.10.0".to_string(),
             date: "2026-08-19".to_string(),
             is_latest: false,
@@ -180,6 +424,19 @@ pub fn build_release_notes() -> Vec<ReleaseNote> {
             ],
         },
         ReleaseNote {
+            version: "2.9.6".to_string(),
+            date: "2026-08-13".to_string(),
+            is_latest: false,
+            groups: vec![
+                feat_group(vec![
+                    Bilingual::new(
+                        "Admin 后台侧边栏支持折叠/展开",
+                        "the admin sidebar can now collapse/expand",
+                    ),
+                ]),
+            ],
+        },
+        ReleaseNote {
             version: "2.9.5".to_string(),
             date: "2026-08-13".to_string(),
             is_latest: false,
@@ -187,6 +444,74 @@ pub fn build_release_notes() -> Vec<ReleaseNote> {
                 "Admin 后台侧边栏支持折叠/展开",
                 "Admin console sidebar now supports collapse/expand",
             )])],
+        },
+        ReleaseNote {
+            version: "2.9.4".to_string(),
+            date: "2026-08-12".to_string(),
+            is_latest: false,
+            groups: vec![
+                fix_group(vec![
+                    Bilingual::new(
+                        "amd64 镜像构建加重试以容忍 Docker Hub 认证服务瞬态 500",
+                        "amd64 image builds retry through transient Docker Hub auth 500s",
+                    ),
+                ]),
+            ],
+        },
+        ReleaseNote {
+            version: "2.9.3".to_string(),
+            date: "2026-08-12".to_string(),
+            is_latest: false,
+            groups: vec![
+                feat_group(vec![
+                    Bilingual::new(
+                        "Token 刷新失败按 invalid_grant 与瞬态失败分类处理",
+                        "token refresh failures are now classified into invalid_grant vs transient",
+                    ),
+                ]),
+            ],
+        },
+        ReleaseNote {
+            version: "2.9.2".to_string(),
+            date: "2026-08-12".to_string(),
+            is_latest: false,
+            groups: vec![
+                feat_group(vec![
+                    Bilingual::new(
+                        "TLS 信任本地 CA，machineId 生成失败增加兜底机制",
+                        "TLS now trusts local CAs; machineId generation gained a fallback",
+                    ),
+                ]),
+            ],
+        },
+        ReleaseNote {
+            version: "2.9.1".to_string(),
+            date: "2026-08-09".to_string(),
+            is_latest: false,
+            groups: vec![
+                feat_group(vec![
+                    Bilingual::new(
+                        "Admin 后台支持中英文全局切换，新增更新日志页面",
+                        "the admin console now switches between Chinese and English globally, with a new changelog page",
+                    ),
+                    Bilingual::new(
+                        "支持模型页按家族分组/着色并标记最低最高费率，按模型分组新增 credits 消费统计，每日统计页新增最近 14 天 credits 趋势",
+                        "models page groups/colors by family with min/max rate badges, per-model credit stats, and a 14-day credits trend on the daily stats page",
+                    ),
+                ]),
+                improve_group(vec![
+                    Bilingual::new(
+                        "移除主 API Key 全局兜底认证，登录密码字段改名为 adminPsw",
+                        "removed the master API key fallback auth; the login password field was renamed to adminPsw",
+                    ),
+                ]),
+                fix_group(vec![
+                    Bilingual::new(
+                        "Dockerfile 补充 COPY assets，修复容器内 ip2region xdb 缺失",
+                        "Dockerfile now copies assets, fixing the missing ip2region xdb in containers",
+                    ),
+                ]),
+            ],
         },
         ReleaseNote {
             version: "2.9.0".to_string(),
