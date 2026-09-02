@@ -523,10 +523,7 @@ impl KiroProvider {
             // MCP 的 profileArn 同样需要真实 ARN（Enterprise / IdC 账号）
             self.ensure_profile_arn(&mut ctx).await;
 
-            // 获取单账号并发 permit
-            let _cred_permit = self.semaphore_for(ctx.id).acquire_owned().await?;
-
-            // RPM 硬限制：精确等待或多账号时 skip
+            // RPM 硬限制：精确等待或多账号时 skip（先于并发 permit 获取，避免等待期间占用账号级并发槛位）
             let rpm_ok = self.wait_for_rpm_gate(ctx.id, " (mcp)").await;
             if !rpm_ok && !small_pool {
                 tracing::info!(
@@ -546,6 +543,14 @@ impl KiroProvider {
                 ));
                 continue;
             }
+
+            // 获取单账号并发 permit（非 sleep 的 continue/Err 分支依赖 _cred_permit 随作用域结束隐式释放；
+            // 仅进入 sleep 退避的分支需要显式 drop，以便退避等待期间归还槛位）
+            let _cred_permit = self.semaphore_for(ctx.id).acquire_owned().await?;
+
+            // 获取单账号并发 permit（非 sleep 的 continue/Err 分支依赖 _cred_permit 随作用域结束隐式释放；
+            // 仅进入 sleep 退避的分支需要显式 drop，以便退避等待期间归还槛位）
+            let _cred_permit = self.semaphore_for(ctx.id).acquire_owned().await?;
 
             let url = self.mcp_url_for(&ctx.credentials);
             let headers = match self.build_mcp_headers(&ctx, attempt) {
@@ -582,6 +587,7 @@ impl KiroProvider {
                     );
                     last_error = Some(e.into());
                     if attempt + 1 < max_retries {
+                        drop(_cred_permit);
                         sleep(Self::retry_delay(attempt)).await;
                     }
                     continue;
@@ -664,6 +670,7 @@ impl KiroProvider {
                 last_error = Some(anyhow::anyhow!("MCP 请求失败: {} {}", status, body));
                 if attempt + 1 < max_retries {
                     let delay = Self::throttle_delay(attempt);
+                    drop(_cred_permit);
                     sleep(delay).await;
                 }
                 continue;
@@ -680,6 +687,7 @@ impl KiroProvider {
                 );
                 last_error = Some(anyhow::anyhow!("MCP 请求失败: {} {}", status, body));
                 if attempt + 1 < max_retries {
+                    drop(_cred_permit);
                     sleep(Self::retry_delay(attempt)).await;
                 }
                 continue;
@@ -693,6 +701,7 @@ impl KiroProvider {
             // 兜底
             last_error = Some(anyhow::anyhow!("MCP 请求失败: {} {}", status, body));
             if attempt + 1 < max_retries {
+                drop(_cred_permit);
                 sleep(Self::retry_delay(attempt)).await;
             }
         }
@@ -787,10 +796,7 @@ impl KiroProvider {
             // Enterprise / IdC 账号需要真实 profileArn，流式端点强制要求
             self.ensure_profile_arn(&mut ctx).await;
 
-            // 获取单账号并发 permit
-            let _cred_permit = self.semaphore_for(ctx.id).acquire_owned().await?;
-
-            // RPM 硬限制：精确等待或多账号时 skip
+            // RPM 硬限制：精确等待或多账号时 skip（先于并发 permit 获取，避免等待期间占用账号级并发槛位）
             let rpm_ok = self.wait_for_rpm_gate(ctx.id, "").await;
             if !rpm_ok && !small_pool {
                 tracing::info!("[RPM-GATE] credential={} RPM 满，跳过切换下一账号", ctx.id);
@@ -807,6 +813,10 @@ impl KiroProvider {
                 ));
                 continue;
             }
+
+            // 获取单账号并发 permit（非 sleep 的 continue/Err 分支依赖 _cred_permit 随作用域结束隐式释放；
+            // 仅进入 sleep 退避的分支需要显式 drop，以便退避等待期间归还槛位）
+            let _cred_permit = self.semaphore_for(ctx.id).acquire_owned().await?;
 
             // 选择下一个可用端点（单账号内轮询，跳过被封禁桶）
             let endpoint = match self.select_endpoint(&ctx.credentials, attempt) {
@@ -850,6 +860,7 @@ impl KiroProvider {
                         .iter()
                         .all(|id| throttled_in_request.contains(id));
                     if (small_pool || all_avoided) && attempt + 1 < max_retries {
+                        drop(_cred_permit);
                         sleep(Self::throttle_delay(attempt)).await;
                     }
                     continue;
@@ -862,6 +873,10 @@ impl KiroProvider {
                 endpoint.name,
                 endpoint.host
             );
+
+            // 获取单账号并发 permit（非 sleep 的 continue/Err 分支依赖 _cred_permit 随作用域结束隐式释放；
+            // 仅进入 sleep 退避的分支需要显式 drop，以便退避等待期间归还槛位）
+            let _cred_permit = self.semaphore_for(ctx.id).acquire_owned().await?;
 
             let url = self.base_url_for(&ctx.credentials, &endpoint);
             let effective_body = Self::rewrite_profile_arn(request_body, &ctx.credentials);
@@ -898,6 +913,7 @@ impl KiroProvider {
                     );
                     last_error = Some(e.into());
                     if attempt + 1 < max_retries {
+                        drop(_cred_permit);
                         sleep(Self::retry_delay(attempt)).await;
                     }
                     continue;
@@ -1028,6 +1044,7 @@ impl KiroProvider {
                 ));
                 if attempt + 1 < max_retries {
                     let delay = Self::throttle_delay(attempt);
+                    drop(_cred_permit);
                     sleep(delay).await;
                 }
                 continue;
@@ -1050,6 +1067,7 @@ impl KiroProvider {
                     body
                 ));
                 if attempt + 1 < max_retries {
+                    drop(_cred_permit);
                     sleep(Self::retry_delay(attempt)).await;
                 }
                 continue;
@@ -1075,6 +1093,7 @@ impl KiroProvider {
                 body
             ));
             if attempt + 1 < max_retries {
+                drop(_cred_permit);
                 sleep(Self::retry_delay(attempt)).await;
             }
         }

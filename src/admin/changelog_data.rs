@@ -68,14 +68,20 @@ const CURRENT_VERSION: &str = env!("CARGO_PKG_VERSION");
 pub fn build_release_notes() -> Vec<ReleaseNote> {
     let mut notes = vec![
         ReleaseNote {
-            version: "3.1.4".to_string(),
+            version: "3.2.0".to_string(),
             date: "2026-09-02".to_string(),
             is_latest: true,
             groups: vec![
-                feat_group(vec![Bilingual::new(
-                    "新增管理端「数据看板」：请求 / Credits / Tokens 时间序列，模型、API Key、账号三维用量切片，支持自定义时间区间与按 Key 筛选",
-                    "Added an admin Data Dashboard: request/credits/tokens time series with per-model, per-key and per-credential slices, custom time ranges and per-key filtering",
-                )]),
+                feat_group(vec![
+                    Bilingual::new(
+                        "新增管理端「数据看板」：请求 / Credits / Tokens 时间序列，模型、API Key、账号三维用量切片，支持自定义时间区间与按 Key 筛选",
+                        "Added an admin Data Dashboard: request/credits/tokens time series with per-model, per-key and per-credential slices, custom time ranges and per-key filtering",
+                    ),
+                    Bilingual::new(
+                        "合并上游 v3.1.0：账号维度模型查询（ModelsDialog）、user-ui 样式对齐 admin-ui",
+                        "Merged upstream v3.1.0: per-account model query (ModelsDialog) and user-ui styles aligned with admin-ui",
+                    ),
+                ]),
                 improve_group(vec![
                     Bilingual::new(
                         "趋势图支持指标切换（请求 / Credits / Tokens），同日按小时全展示、跨天按天零填充",
